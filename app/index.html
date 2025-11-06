@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>MusicGen API Tester</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f5f5f5; }
+    h1 { color: #333; }
+    .section { background: #fff; padding: 1rem 2rem; margin-bottom: 2rem; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+    label { font-weight: bold; display: block; margin-top: 1rem; }
+    input, select, button { margin-top: 0.5rem; padding: 0.4rem; width: 100%; max-width: 400px; }
+    button { cursor: pointer; background: #0078d7; color: #fff; border: none; border-radius: 4px; }
+    button:hover { background: #005fa3; }
+    pre { background: #eee; padding: 1rem; border-radius: 4px; white-space: pre-wrap; }
+    img { max-width: 100%; margin-top: 1rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>🎵 MusicGen API Tester</h1>
+
+  <!-- List models -->
+  <div class="section">
+    <h2>1️⃣ Listar modelos disponibles</h2>
+    <button onclick="listModels()">Cargar /models</button>
+    <pre id="models"></pre>
+  </div>
+
+  <!-- Upload -->
+  <div class="section">
+    <h2>2️⃣ Subir archivo (MIDI o WAV)</h2>
+    <input type="file" id="uploadFile" />
+    <button onclick="uploadFile()">Subir archivo</button>
+    <pre id="uploadResult"></pre>
+  </div>
+
+  <!-- Generate -->
+  <div class="section">
+    <h2>3️⃣ Generar música</h2>
+    <label>Model ID:</label>
+    <input type="text" id="model_id" placeholder="Ejemplo: lstm_v1" />
+
+    <label>Archivo seed (MIDI o WAV):</label>
+    <input type="file" id="genFile" />
+
+    <label>Longitud generada (gen_len):</label>
+    <input type="number" id="gen_len" value="50" />
+
+    <label>Temperatura:</label>
+    <input type="number" id="temperature" step="0.1" value="1.0" />
+
+    <label>Modo:</label>
+    <select id="mode">
+      <option value="from_song">from_song</option>
+      <option value="from_seed">from_seed</option>
+    </select>
+
+    <button onclick="generateMusic()">Generar</button>
+    <pre id="generateResult"></pre>
+    <div id="images"></div>
+  </div>
+
+  <!-- Download -->
+  <div class="section">
+    <h2>4️⃣ Descargar archivo</h2>
+    <label>Ruta absoluta:</label>
+    <input type="text" id="downloadPath" placeholder="/ruta/al/archivo.mid" />
+    <button onclick="downloadFile()">Descargar</button>
+  </div>
+
+  <script>
+    const API_BASE = "http://localhost:8000";
+
+    async function listModels() {
+      const res = await fetch(`${API_BASE}/models`);
+      const data = await res.json();
+      document.getElementById("models").textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function uploadFile() {
+      const fileInput = document.getElementById("uploadFile");
+      if (!fileInput.files.length) return alert("Selecciona un archivo primero");
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
+      const data = await res.json();
+      document.getElementById("uploadResult").textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function generateMusic() {
+      const model_id = document.getElementById("model_id").value;
+      const gen_len = document.getElementById("gen_len").value;
+      const temperature = document.getElementById("temperature").value;
+      const mode = document.getElementById("mode").value;
+      const fileInput = document.getElementById("genFile");
+      if (!fileInput.files.length) return alert("Selecciona un archivo seed primero");
+
+      const formData = new FormData();
+      formData.append("model_id", model_id);
+      formData.append("gen_len", gen_len);
+      formData.append("temperature", temperature);
+      formData.append("mode", mode);
+      formData.append("file", fileInput.files[0]);
+
+      const res = await fetch(`${API_BASE}/generate`, { method: "POST", body: formData });
+      const data = await res.json();
+      document.getElementById("generateResult").textContent = JSON.stringify(data, null, 2);
+
+      if (data.files) {
+        const imgDiv = document.getElementById("images");
+        imgDiv.innerHTML = "";
+        if (data.files.pianoroll_seed)
+          imgDiv.innerHTML += `<h3>Piano Roll Seed</h3><img src="http://localhost:8000/download?path=${encodeURIComponent(data.files.pianoroll_seed)}" />`;
+        if (data.files.pianoroll_gen)
+          imgDiv.innerHTML += `<h3>Piano Roll Generado</h3><img src="http://localhost:8000/download?path=${encodeURIComponent(data.files.pianoroll_gen)}" />`;
+      }
+    }
+
+    async function downloadFile() {
+      const path = document.getElementById("downloadPath").value;
+      if (!path) return alert("Escribe la ruta completa del archivo");
+      window.open(`${API_BASE}/download?path=${encodeURIComponent(path)}`, "_blank");
+    }
+  </script>
+</body>
+</html>

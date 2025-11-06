@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "id": "model1",
+      "name": "Modelo 1",
+      "description": "Es mejor para \"predecir\" - valid acc: 0.87",
+      "model_path": "models/best_model.h5",
+      "token2idx_path": "models/token2idx.json",
+      "metrics": {"val_accuracy": 0.87}
+    },
+    {
+      "id": "model2",
+      "name": "Modelo 2",
+      "description": "Es mejor para generar algo nuevo - valid acc: 0.82",
+      "model_path": "models/best_model.h5",
+      "token2idx_path": "models/token2idx.json",
+      "metrics": {"val_accuracy": 0.82}
+    }
+  ]
+}
