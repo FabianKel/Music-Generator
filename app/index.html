@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MusicGen API</title>
+  <title>MusicGen</title>
+  <link rel="icon" type="image/png" href="/static/logo%20disco.png">
+  <meta name="theme-color" content="#7e57c2">
   <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
   <style>
@@ -461,6 +463,30 @@
   .token.unknown { background:#ffebee; border-color:#ffcdd2; color:#c62828; }
   .token.rest { background:#e8f5e9; border-color:#c8e6c9; color:#2e7d32; }
   .token.playing { background:#1e88e5; color:white; transform:scale(1.03); }
+  
+  /* Generated files area (cards) */
+  #genFilesArea { margin-top: 12px; }
+  .file-card {
+    background: white;
+    border: 1px solid #e8f0fb;
+    border-radius: 10px;
+    padding: 12px;
+    box-shadow: 0 4px 12px rgba(12,35,64,0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 200px;
+  }
+
+  .file-title { font-weight:700; color:#2e5aac; font-size:0.95rem; }
+  .file-path { font-family: 'Courier New', monospace; color:#546e7a; font-size:0.85rem; word-break: break-all; }
+
+  .file-actions { display:flex; gap:8px; margin-top:6px; }
+  .file-actions a.btn { padding: 0.45rem 0.8rem; font-size:0.9rem; }
+  .file-actions a.btn:hover { box-shadow: 0 6px 18px rgba(93,114,179,0.12); }
+
+  /* responsive wrapping for the files container */
+  #genFilesArea > div { display:flex; gap:12px; flex-wrap:wrap; }
   </style>
 </head>
 <body>
@@ -542,21 +568,10 @@
       <div id="images" class="image-grid"></div>
     </div>
 
-    <!-- Download -->
-    <div class="section">
-      <div class="section-header">
-        <div class="section-number">3</div>
-        <h2 class="section-title">Descargar y Reproducir</h2>
-      </div>
-      <div id="downloadArea" class="download-area">
-        <p>Después de generar, aquí aparecerán los archivos generados para descargar y reproducir.</p>
-      </div>
-    </div>
-
     <!-- Detailed generation result & interactive piano -->
     <div id="generationDetail" class="section" style="display:none;">
       <div class="section-header">
-        <div class="section-number">4</div>
+        <div class="section-number">3</div>
         <h2 class="section-title">Detalle de la Generación</h2>
       </div>
       <div id="genInfo" style="margin-bottom:1rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;"></div>
@@ -582,6 +597,17 @@
       </div>
 
       <div style="margin-top:1rem;" id="genFilesArea"></div>
+    </div>
+
+    <!-- Download -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-number">4</div>
+        <h2 class="section-title">Descargar y Reproducir</h2>
+      </div>
+      <div id="downloadArea" class="download-area">
+        <p>Después de generar, aquí aparecerán los archivos generados para descargar y reproducir.</p>
+      </div>
     </div>
   </div>
 
