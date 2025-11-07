@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <title>MusicGen API Tester</title>
+  <!-- Tone.js and Midi parser for in-browser MIDI playback -->
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; background: #f5f5f5; }
     h1 { color: #333; }
@@ -13,6 +16,12 @@
     button:hover { background: #005fa3; }
     pre { background: #eee; padding: 1rem; border-radius: 4px; white-space: pre-wrap; }
     img { max-width: 100%; margin-top: 1rem; border-radius: 4px; }
+    /* Player styles */
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .btn { background:#0078d7; color:#fff; padding:10px 16px; border-radius:6px; text-decoration:none; display:inline-block; }
+    .btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .pill-audio { background:#111; color:#fff; padding:10px 18px; border-radius:24px; display:inline-flex; align-items:center; gap:12px; }
+    .small { padding:6px 10px; border-radius:6px; }
   </style>
 </head>
 <body>
@@ -25,22 +34,31 @@
     <pre id="models"></pre>
   </div>
 
-  <!-- Upload -->
-  <div class="section">
-    <h2>2️⃣ Subir archivo (MIDI o WAV)</h2>
-    <input type="file" id="uploadFile" />
-    <button onclick="uploadFile()">Subir archivo</button>
-    <pre id="uploadResult"></pre>
-  </div>
+  <!-- Upload section removed (duplicate of Generate -> seed file input) -->
 
   <!-- Generate -->
   <div class="section">
     <h2>3️⃣ Generar música</h2>
-    <label>Model ID:</label>
-    <input type="text" id="model_id" placeholder="Ejemplo: lstm_v1" />
+    <label>Model:</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select id="model_select" style="flex:1; padding:0.4rem; max-width:none;">
+        <option value="">Cargar modelos...</option>
+      </select>
+      <button onclick="listModels()" style="width:120px;">Refrescar</button>
+    </div>
 
     <label>Archivo seed (MIDI o WAV):</label>
     <input type="file" id="genFile" />
+    <div id="seedControls" style="margin-top:8px;">
+      <div class="controls">
+        <button type="button" id="playSeedBtn" class="btn small" onclick="playSeed()" disabled>Reproducir seed</button>
+        <button type="button" id="pauseSeedBtn" class="btn small" disabled>Pausa</button>
+        <button type="button" id="stopSeedBtn" class="btn small" disabled>Detener</button>
+        <a id="downloadSeedLink" style="display:none;" class="btn small">Descargar seed</a>
+      </div>
+      <div id="seedMsg" style="margin-top:6px;color:#666;"></div>
+      <audio id="seedPlayer" controls style="display:none;margin-top:8px;max-width:400px;"></audio>
+    </div>
 
     <label>Longitud generada (gen_len):</label>
     <input type="number" id="gen_len" value="50" />
@@ -61,10 +79,10 @@
 
   <!-- Download -->
   <div class="section">
-    <h2>4️⃣ Descargar archivo</h2>
-    <label>Ruta absoluta:</label>
-    <input type="text" id="downloadPath" placeholder="/ruta/al/archivo.mid" />
-    <button onclick="downloadFile()">Descargar</button>
+    <h2>4️⃣ Descargar y escuchar</h2>
+    <div id="downloadArea">
+      <p>Después de generar, aquí aparecerán botones para descargar y reproducir el archivo generado.</p>
+    </div>
   </div>
 
   <script>
@@ -72,8 +90,21 @@
 
     async function listModels() {
       const res = await fetch(`${API_BASE}/models`);
-      const data = await res.json();
-      document.getElementById("models").textContent = JSON.stringify(data, null, 2);
+        const data = await res.json();
+        document.getElementById("models").textContent = JSON.stringify(data, null, 2);
+        // populate select
+        const sel = document.getElementById('model_select');
+        sel.innerHTML = '';
+        if (data && data.models && data.models.length) {
+          data.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = `${m.id} — ${m.name || ''}`;
+            sel.appendChild(opt);
+          });
+        } else {
+          const opt = document.createElement('option'); opt.value = ''; opt.textContent = 'No models found'; sel.appendChild(opt);
+        }
     }
 
     async function uploadFile() {
@@ -87,7 +118,8 @@
     }
 
     async function generateMusic() {
-      const model_id = document.getElementById("model_id").value;
+  const modelSelect = document.getElementById("model_select");
+  const model_id = modelSelect ? modelSelect.value : document.getElementById("model_id")?.value;
       const gen_len = document.getElementById("gen_len").value;
       const temperature = document.getElementById("temperature").value;
       const mode = document.getElementById("mode").value;
@@ -102,23 +134,354 @@
       formData.append("file", fileInput.files[0]);
 
       const res = await fetch(`${API_BASE}/generate`, { method: "POST", body: formData });
-      const data = await res.json();
-      document.getElementById("generateResult").textContent = JSON.stringify(data, null, 2);
+  const data = await res.json();
+  // hide server-side synthesis notes/errors from the displayed JSON
+  const displayData = Object.assign({}, data);
+  try { delete displayData.synthesis_note; delete displayData.synthesis_error; } catch(e){}
+  document.getElementById("generateResult").textContent = JSON.stringify(displayData, null, 2);
 
       if (data.files) {
         const imgDiv = document.getElementById("images");
         imgDiv.innerHTML = "";
-        if (data.files.pianoroll_seed)
-          imgDiv.innerHTML += `<h3>Piano Roll Seed</h3><img src="http://localhost:8000/download?path=${encodeURIComponent(data.files.pianoroll_seed)}" />`;
-        if (data.files.pianoroll_gen)
-          imgDiv.innerHTML += `<h3>Piano Roll Generado</h3><img src="http://localhost:8000/download?path=${encodeURIComponent(data.files.pianoroll_gen)}" />`;
+        // data.files now contains relative URLs like /files/{subdir}/{file}
+        if (data.files.pianoroll_seed) {
+          const url = data.files.pianoroll_seed.startsWith("/") ? API_BASE + data.files.pianoroll_seed : data.files.pianoroll_seed;
+          imgDiv.innerHTML += `<h3>Piano Roll Seed</h3><img src="${url}" />`;
+        }
+        if (data.files.pianoroll_gen) {
+          const url = data.files.pianoroll_gen.startsWith("/") ? API_BASE + data.files.pianoroll_gen : data.files.pianoroll_gen;
+          imgDiv.innerHTML += `<h3>Piano Roll Generado</h3><img src="${url}" />`;
+        }
+
+        // handle downloads and playback (inside generateMusic)
+        const dlArea = document.getElementById('downloadArea');
+        dlArea.innerHTML = '';
+        if (data.files && data.files.midi) {
+          const midiUrl = data.files.midi.startsWith('/') ? API_BASE + data.files.midi : data.files.midi;
+          const a = document.createElement('a');
+          a.href = midiUrl;
+          try { const parts = midiUrl.split('/'); a.download = parts[parts.length-1] || 'generated.mid'; } catch(e){ a.download = 'generated.mid'; }
+          a.textContent = 'Descargar MIDI';
+          a.style.display = 'inline-block';
+          a.style.marginRight = '12px';
+          a.className = 'btn';
+          a.target = '_blank';
+          dlArea.appendChild(a);
+          // add browser playback button (uses Tone.js + Midi parser)
+          const playBtn = document.createElement('button');
+          playBtn.textContent = 'Reproducir MIDI (navegador)';
+          playBtn.style.marginLeft = '8px';
+          playBtn.className = 'btn';
+          playBtn.dataset.midiPlayer = 'true';
+          const pauseBtn = document.createElement('button');
+          pauseBtn.textContent = 'Pausa';
+          pauseBtn.style.marginLeft = '8px'; pauseBtn.className='btn'; pauseBtn.disabled = true;
+          const resumeBtn = document.createElement('button');
+          resumeBtn.textContent = 'Continuar';
+          resumeBtn.style.marginLeft = '8px'; resumeBtn.className='btn'; resumeBtn.disabled = true;
+          const stopBtn = document.createElement('button');
+          stopBtn.textContent = 'Detener reproducción';
+          stopBtn.style.marginLeft = '8px';
+          stopBtn.className = 'btn';
+          stopBtn.disabled = true;
+          const restartBtn = document.createElement('button');
+          restartBtn.textContent = 'Reiniciar'; restartBtn.className='btn'; restartBtn.style.marginLeft='8px'; restartBtn.disabled = true;
+          playBtn.onclick = async () => {
+            try { await Tone.start(); } catch(e){}
+            // normalize midiUrl to server-relative path if needed
+            let pathForSynth = midiUrl;
+            try {
+              const origin = new URL(API_BASE).origin;
+              if (pathForSynth.startsWith(origin)) pathForSynth = pathForSynth.slice(origin.length);
+            } catch (e) {}
+              if (_midiPlayer.started) {
+                stopMidi();
+              } else {
+                await playMidiFromUrl(pathForSynth);
+                playBtn.disabled = true; pauseBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; resumeBtn.disabled = true;
+              }
+          };
+            stopBtn.onclick = () => { stopMidi(); playBtn.disabled = false; pauseBtn.disabled = true; resumeBtn.disabled = true; stopBtn.disabled = true; restartBtn.disabled = true; };
+            pauseBtn.onclick = () => { pauseMidi(); pauseBtn.disabled = true; resumeBtn.disabled = false; };
+            resumeBtn.onclick = () => { resumeMidi(); resumeBtn.disabled = true; pauseBtn.disabled = false; };
+            restartBtn.onclick = async () => { stopMidi(); await playMidiFromUrl(pathForSynth); playBtn.disabled = true; pauseBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; resumeBtn.disabled = true; };
+          dlArea.appendChild(playBtn);
+            dlArea.appendChild(pauseBtn);
+            dlArea.appendChild(resumeBtn);
+            dlArea.appendChild(stopBtn);
+            dlArea.appendChild(restartBtn);
+        }
+
+        // (WAV playback intentionally omitted; browser MIDI playback used instead)
       }
     }
 
-    async function downloadFile() {
-      const path = document.getElementById("downloadPath").value;
-      if (!path) return alert("Escribe la ruta completa del archivo");
-      window.open(`${API_BASE}/download?path=${encodeURIComponent(path)}`, "_blank");
+    // populate models on load
+    listModels();
+
+    // handle seed file local preview/playback when user selects a file
+    document.getElementById('genFile').addEventListener('change', function(e){
+      const f = this.files && this.files[0];
+      const seedPlayer = document.getElementById('seedPlayer');
+      const playSeedBtn = document.getElementById('playSeedBtn');
+      const downloadSeedLink = document.getElementById('downloadSeedLink');
+      const seedMsg = document.getElementById('seedMsg');
+  seedPlayer.style.display = 'none';
+  // disable controls until a valid file is selected
+  try { playSeedBtn.disabled = true; pauseSeedBtn.disabled = true; stopSeedBtn.disabled = true; } catch(e){}
+  downloadSeedLink.style.display='none'; seedMsg.textContent='';
+      if (!f) return;
+      const name = f.name || '';
+      const lower = name.toLowerCase();
+      // treat MIDI files by extension first (browsers usually can't play .mid in <audio>)
+      if (lower.endsWith('.mid') || lower.endsWith('.midi')) {
+        // enable local MIDI playback using Tone.js (read file and schedule notes)
+  // enable controls for MIDI seed
+  playSeedBtn.disabled = false; pauseSeedBtn.disabled = true; stopSeedBtn.disabled = true;
+        playSeedBtn.textContent = 'Reproducir seed';
+        pauseSeedBtn.textContent = 'Pausa';
+        stopSeedBtn.textContent = 'Detener';
+        // click handlers
+        playSeedBtn.onclick = async () => {
+          seedMsg.textContent = '';
+          try {
+            console.log('Seed play clicked');
+            await Tone.start();
+            playSeedBtn.disabled = true; pauseSeedBtn.disabled = false; stopSeedBtn.disabled = false;
+            playSeedBtn.textContent = 'Reproduciendo...';
+            const ab = await f.arrayBuffer();
+            await playMidiFromArrayBuffer(ab);
+            seedMsg.textContent = 'Reproduciendo seed...';
+          } catch (e) {
+            console.error('Error reproduciendo MIDI local:', e);
+            seedMsg.textContent = 'No fue posible reproducir el MIDI localmente. Mira la consola (F12).';
+          } finally {
+            playSeedBtn.disabled = false;
+            playSeedBtn.textContent = 'Reproducir seed';
+          }
+        };
+  pauseSeedBtn.onclick = () => { pauseMidi(); pauseSeedBtn.disabled = true; playSeedBtn.disabled = false; };
+  stopSeedBtn.onclick = () => { stopMidi(); pauseSeedBtn.disabled = true; playSeedBtn.disabled = false; stopSeedBtn.disabled = true; };
+        seedMsg.textContent = 'Archivo MIDI local listo para reproducir. Usa el botón "Reproducir seed".';
+        // hide download link for local MIDI (no need to download what you already have)
+        downloadSeedLink.style.display='none';
+      } else if (f.type.startsWith('audio/') || lower.endsWith('.wav') || lower.endsWith('.mp3') || lower.endsWith('.ogg')) {
+        const url = URL.createObjectURL(f);
+        seedPlayer.src = url; seedPlayer.style.display='block';
+  playSeedBtn.disabled = false;
+        playSeedBtn.onclick = async () => {
+          try {
+            await seedPlayer.play();
+          } catch (e) {
+            console.error('Error reproduciendo audio nativo:', e);
+            // if the file is actually a MIDI misreported as audio, suggest using the MIDI player
+            if (lower.endsWith('.mid') || lower.endsWith('.midi')) {
+              seedMsg.textContent = 'El navegador no reproduce MIDI en el elemento <audio>. Usa el botón "Reproducir seed" para reproducir vía sintetizador del navegador.';
+            } else {
+              seedMsg.textContent = 'No se puede reproducir este archivo en el navegador.';
+            }
+          }
+        };
+        // hide download link for uploaded seed (user already has the file)
+        downloadSeedLink.style.display='none';
+        seedMsg.textContent = '';
+      
+      } else {
+        seedMsg.textContent = 'Archivo no reconocible para reproducción en navegador.';
+      }
+    });
+
+    function playSeed(){
+      const seedPlayer = document.getElementById('seedPlayer');
+      if(seedPlayer && seedPlayer.src){ seedPlayer.play(); }
+    }
+
+    // ---- In-browser MIDI playback using Tone.js + @tonejs/midi ----
+    let _midiPlayer = {
+      nowPart: null,
+      synths: [],
+      started: false
+    };
+
+    async function playMidiFromUrl(url){
+      try {
+        await Tone.start();
+      } catch(e){ /* user gesture required in some browsers; ignore */ }
+      try { Tone.getDestination().volume.value = -3; } catch(e){}
+      // if already playing, stop first
+      if (_midiPlayer.started) {
+        stopMidi();
+        return;
+      }
+  // fetch midi as arraybuffer (or accept a relative URL)
+  const resp = await fetch(url);
+  const ab = await resp.arrayBuffer();
+  const midi = new Midi(ab);
+
+      // We'll schedule notes directly with Tone.now()+note.time to avoid Transport issues
+      try {
+        if (midi.header && midi.header.tempos && midi.header.tempos.length) {
+          // set a reasonable bpm for timebase only; not required for scheduling by seconds
+          Tone.Transport.bpm.value = midi.header.tempos[0].bpm;
+        }
+      } catch (e) {}
+
+      const maxTracks = Math.min(6, midi.tracks.length);
+      _midiPlayer.synths = [];
+      const scheduled = [];
+      const base = Tone.now() + 0.1; // small offset so audio context wakes
+
+      // create one louder poly synth per track and schedule notes by absolute seconds
+      for (let i = 0; i < maxTracks; i++) {
+        const track = midi.tracks[i];
+        if (!track || !track.notes || track.notes.length === 0) continue;
+        // Use a robust synth voice and slightly higher gain; 8 voices
+        const synth = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8 }).toDestination();
+        try { synth.volume.value = -6; } catch(e){}
+        _midiPlayer.synths.push(synth);
+
+        for (const n of track.notes) {
+          // some notes may lack velocity; default to 0.9
+          const vel = (typeof n.velocity === 'number' && n.velocity > 0) ? n.velocity : 0.9;
+          const start = base + (n.time || 0);
+          const dur = n.duration || 0.5;
+          // schedule an attack/release at absolute audio time
+          const ev = { synth, note: n.name, when: start, dur, vel };
+          scheduled.push(ev);
+          // schedule via setTimeout to call synth.triggerAttackRelease at right time
+          const delay = Math.max(0, (start - Tone.now()) * 1000);
+          const tId = setTimeout(() => {
+            try { ev.synth.triggerAttackRelease(ev.note, ev.dur, undefined, ev.vel); } catch (e) {}
+          }, Math.round(delay));
+          ev._timer = tId;
+        }
+      }
+
+  _midiPlayer.nowPart = scheduled;
+  _midiPlayer.started = true;
+  _midiPlayer.paused = false;
+      // stop after midi.duration
+      const total = (midi.duration || 30);
+      _midiPlayer.stopTimeout = setTimeout(() => stopMidi(), (total + 1) * 1000);
+    }
+
+    // Pause: clear timers and store remaining time for each event
+    function pauseMidi(){
+      if (!_midiPlayer.started || _midiPlayer.paused) return;
+      const now = Tone.now();
+      if (_midiPlayer.nowPart) {
+        _midiPlayer.nowPart.forEach(ev => {
+          try {
+            if (ev._timer) { clearTimeout(ev._timer); ev._timer = null; }
+            // remaining time in seconds
+            ev.remaining = Math.max(0, (ev.when - now));
+          } catch(e){}
+        });
+      }
+      // stop currently sounding notes by disposing synths and recreate later
+      if (_midiPlayer.synths) {
+        _midiPlayer.synths.forEach(s => { try{ s.releaseAll && s.releaseAll(); }catch(e){} });
+      }
+      if (_midiPlayer.stopTimeout) { clearTimeout(_midiPlayer.stopTimeout); _midiPlayer.stopTimeout = null; }
+      _midiPlayer.paused = true;
+      console.log('Playback paused');
+    }
+
+    // Resume: schedule remaining events again relative to now
+    function resumeMidi(){
+      if (!_midiPlayer.started || !_midiPlayer.paused) return;
+      const base = Tone.now() + 0.05;
+      if (_midiPlayer.nowPart) {
+        _midiPlayer.nowPart.forEach(ev => {
+          try {
+            const rem = (typeof ev.remaining === 'number') ? ev.remaining : Math.max(0, ev.when - Tone.now());
+            if (rem <= 0) return; // skip
+            ev.when = base + rem;
+            const delay = Math.max(0, (ev.when - Tone.now()) * 1000);
+            ev._timer = setTimeout(() => {
+              try { ev.synth.triggerAttackRelease(ev.note, ev.dur, undefined, ev.vel); } catch(e){}
+            }, Math.round(delay));
+          } catch(e){ console.error('resume schedule error', e); }
+        });
+      }
+      // re-arm auto-stop
+      // find longest remaining
+      let maxRem = 0;
+      if (_midiPlayer.nowPart) {
+        _midiPlayer.nowPart.forEach(ev => { if (ev && typeof ev.remaining === 'number') maxRem = Math.max(maxRem, ev.remaining); });
+      }
+      _midiPlayer.stopTimeout = setTimeout(() => { stopMidi(); }, Math.round((maxRem + 1) * 1000));
+      _midiPlayer.paused = false;
+      console.log('Playback resumed');
+    }
+
+    // Play from an ArrayBuffer (used for local File objects)
+    async function playMidiFromArrayBuffer(arrayBuffer){
+      try { await Tone.start(); } catch(e){}
+      try { Tone.getDestination().volume.value = -3; } catch(e){}
+      if (_midiPlayer.started) stopMidi();
+      console.log('playMidiFromArrayBuffer: parsed midi, scheduling...');
+      const midi = new Midi(arrayBuffer);
+
+      try {
+        if (midi.header && midi.header.tempos && midi.header.tempos.length) {
+          Tone.Transport.bpm.value = midi.header.tempos[0].bpm;
+        }
+      } catch(e){}
+
+      const maxTracks = Math.min(6, midi.tracks.length);
+      _midiPlayer.synths = [];
+      const scheduled = [];
+      const base = Tone.now() + 0.1;
+
+      for (let i = 0; i < maxTracks; i++) {
+        const track = midi.tracks[i];
+        if (!track || !track.notes || track.notes.length === 0) continue;
+        const synth = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8 }).toDestination();
+        try { synth.volume.value = -6; } catch(e){}
+        _midiPlayer.synths.push(synth);
+
+        for (const n of track.notes) {
+          const vel = (typeof n.velocity === 'number' && n.velocity > 0) ? n.velocity : 0.9;
+          const start = base + (n.time || 0);
+          const dur = n.duration || 0.5;
+          const ev = { synth, note: n.name, when: start, dur, vel };
+          scheduled.push(ev);
+          const delay = Math.max(0, (start - Tone.now()) * 1000);
+          const tId = setTimeout(() => {
+            try { ev.synth.triggerAttackRelease(ev.note, ev.dur, undefined, ev.vel); } catch (e) {}
+          }, Math.round(delay));
+          ev._timer = tId;
+        }
+      }
+
+      _midiPlayer.nowPart = scheduled;
+      _midiPlayer.started = true;
+      console.log('Scheduled', scheduled.length, 'note events; total duration', midi.duration);
+      const total = (midi.duration || 30);
+      _midiPlayer.stopTimeout = setTimeout(() => {
+        console.log('Auto stopping after duration');
+        stopMidi();
+      }, (total + 1) * 1000);
+    }
+
+    function stopMidi(){
+      if (_midiPlayer.nowPart) {
+        // cancel any scheduled timers for note events
+        _midiPlayer.nowPart.forEach(ev => {
+          try { if (ev && ev._timer) clearTimeout(ev._timer); } catch(e){}
+        });
+        _midiPlayer.nowPart = null;
+      }
+      if (_midiPlayer.synths) {
+        _midiPlayer.synths.forEach(s => { try{ s.dispose(); }catch(e){} });
+        _midiPlayer.synths = [];
+      }
+      if (_midiPlayer.stopTimeout) { clearTimeout(_midiPlayer.stopTimeout); _midiPlayer.stopTimeout = null; }
+  try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch(e) {}
+      // reset any play buttons
+      document.querySelectorAll('button[data-midi-player="true"]').forEach(b => { b.textContent = 'Reproducir MIDI (navegador)'; });
+      _midiPlayer.started = false;
     }
   </script>
 </body>

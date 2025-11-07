@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+music21
+pretty_midi
+librosa
+matplotlib
+numpy
+tensorflow

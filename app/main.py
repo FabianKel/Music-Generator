@@ -43,6 +43,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Serve the frontend index.html at project root
+@app.get("/", include_in_schema=False)
+def serve_index():
+    idx = BASE_DIR / "app" / "index.html"
+    if not idx.exists():
+        raise HTTPException(404, "Index file not found")
+    return FileResponse(path=str(idx), media_type="text/html")
+
 # ---------- Utilities for model catalog ----------
 def read_models_catalog():
     if not MODELS_JSON.exists():
@@ -86,25 +95,73 @@ def build_stream_from_sequence_tokens(seq_tokens):
     S.append(m21.stream.Measure())
     offset = 0
     for t in seq_tokens:
-        if "." in t:
+        # Handle special tokens
+        if not isinstance(t, str):
+            t = str(t)
+        tt = t.strip()
+        if tt.upper() == "REST" or tt == "<UNK>":
+            r = m21.note.Rest()
+            r.quarterLength = 1.0
+            r.offset = offset
+            S.append(r)
+        elif "." in tt:
             notes = []
-            for n in t.split("."):
+            for n in tt.split("."):
+                n = n.strip()
+                if not n:
+                    continue
+                if n.upper() == "REST" or n == "<UNK>":
+                    continue
+                # try as MIDI number
                 try:
                     notes.append(m21.note.Note(int(n)))
+                    continue
                 except Exception:
-                    notes.append(m21.note.Note(n))
-            c = m21.chord.Chord(notes)
-            c.quarterLength = 1.0
-            c.offset = offset
-            S.append(c)
+                    pass
+                # normalize flat notation from 'B-' to 'Bb'
+                norm = n.replace('-', 'b')
+                try:
+                    notes.append(m21.note.Note(norm))
+                except Exception:
+                    # ignore invalid note
+                    continue
+            if len(notes) == 0:
+                r = m21.note.Rest()
+                r.quarterLength = 1.0
+                r.offset = offset
+                S.append(r)
+            else:
+                c = m21.chord.Chord(notes)
+                c.quarterLength = 1.0
+                c.offset = offset
+                S.append(c)
         else:
-            try:
-                n = m21.note.Note(int(t))
-            except Exception:
-                n = m21.note.Note(t)
-            n.quarterLength = 1.0
-            n.offset = offset
-            S.append(n)
+            # single token
+            if tt.upper() == "REST" or tt == "<UNK>":
+                r = m21.note.Rest()
+                r.quarterLength = 1.0
+                r.offset = offset
+                S.append(r)
+            else:
+                # try MIDI number first
+                try:
+                    nobj = m21.note.Note(int(tt))
+                except Exception:
+                    # normalize flats and try name
+                    try:
+                        name = tt.replace('-', 'b')
+                        nobj = m21.note.Note(name)
+                    except Exception:
+                        # fallback to rest if cannot parse
+                        r = m21.note.Rest()
+                        r.quarterLength = 1.0
+                        r.offset = offset
+                        S.append(r)
+                        offset += 1
+                        continue
+                nobj.quarterLength = 1.0
+                nobj.offset = offset
+                S.append(nobj)
         offset += 1
     sc = m21.stream.Score()
     sc.insert(0, S)
@@ -116,9 +173,55 @@ def encode_seed(seed_notes, token2idx):
     #print("DICCIONARIO: ",token2idx)
     seed_encoded = []
     not_founded = 0
+    # helper: try alternative representations
+    def try_map(token):
+        # direct match
+        if token in token2idx:
+            return token2idx[token]
+        # if token is numeric MIDI like '60' or chord '60.64.67', convert to names and try
+        parts = token.split('.')
+        converted_parts = []
+        all_numeric = True
+        for p in parts:
+            if p.upper().startswith('REST'):
+                converted_parts.append('REST')
+                all_numeric = False
+                continue
+            try:
+                n = int(p)
+                # use pretty_midi to get name
+                try:
+                    nm = pretty_midi.note_number_to_name(n)
+                except Exception:
+                    nm = str(n)
+                # normalize flats to token format: pretty_midi uses Bb, token2idx uses B-
+                nm = nm.replace('b', '-')
+                converted_parts.append(nm)
+            except Exception:
+                all_numeric = False
+                converted_parts.append(p)
+
+        if all_numeric:
+            candidate = '.'.join(converted_parts)
+            if candidate in token2idx:
+                return token2idx[candidate]
+            # sometimes token order differs; try sorted by pitch name
+            candidate2 = '.'.join(sorted(converted_parts))
+            if candidate2 in token2idx:
+                return token2idx[candidate2]
+        # try token as-is with replacing 'b' -> '-'
+        alt = token.replace('b', '-')
+        if alt in token2idx:
+            return token2idx[alt]
+        # fallback to <UNK> if present
+        if '<UNK>' in token2idx:
+            return token2idx['<UNK>']
+        return None
+
     for n in seed_notes:
-        if n in token2idx:
-            seed_encoded.append(token2idx[n])
+        mapped = try_map(n)
+        if mapped is not None:
+            seed_encoded.append(mapped)
         else:
             not_founded += 1
     print(f"{not_founded} notes not founded")
@@ -153,11 +256,22 @@ def midi_to_sequence_tokens(midi_path):
     for t in range(T):
         pitches = np.where(pr[:, t] > 0)[0]
         if len(pitches) == 0:
-            tokens.append("REST")  # si tu vocab no tiene REST, podrías mapear a algo
+            tokens.append("REST")
         elif len(pitches) == 1:
-            tokens.append(str(pitches[0]))  # usas ints en tu notebook
+            # convert MIDI number to note name (e.g. 60 -> C4)
+            try:
+                name = pretty_midi.note_number_to_name(int(pitches[0]))
+            except Exception:
+                name = str(int(pitches[0]))
+            tokens.append(name)
         else:
-            tokens.append(".".join(str(int(p)) for p in pitches))
+            names = []
+            for p in pitches:
+                try:
+                    names.append(pretty_midi.note_number_to_name(int(p)))
+                except Exception:
+                    names.append(str(int(p)))
+            tokens.append(".".join(names))
     return tokens
 
 # ---------- WAV -> MIDI (heurístico monofónico) ----------
@@ -363,6 +477,12 @@ async def generate_audio(
         if wav_created:
             shutil.copy(wav_out_fp, out_dir / wav_out_fp.name)
 
+        # expose files as relative, safe URLs under /files/{subdir}/{filename}
+        files_urls = {
+            "midi": f"/files/{out_dir.name}/{midi_out_fp.name}",
+            "pianoroll_seed": f"/files/{out_dir.name}/{img_seed.name}",
+            "pianoroll_gen": f"/files/{out_dir.name}/{img_gen.name}"
+        }
         response = {
             "model_id": model_id,
             "mode": mode,
@@ -371,14 +491,11 @@ async def generate_audio(
             "tokens_generated_decoded": gen_tokens,
             "tokens_seed": seed_slice,
             "not_found_in_vocab_seed": not_found,
-            "files": {
-                "midi": str((out_dir / midi_out_fp.name).absolute()),
-                "pianoroll_seed": str((out_dir / img_seed.name).absolute()),
-                "pianoroll_gen": str((out_dir / img_gen.name).absolute())
-            }
+            "files": files_urls
         }
         if wav_created:
-            response["files"]["wav"] = str((out_dir / wav_out_fp.name).absolute())
+            # expose wav as relative URL under /files
+            response["files"]["wav"] = f"/files/{out_dir.name}/{wav_out_fp.name}"
         else:
             response["synthesis_note"] = "WAV not created. Install fluidsynth and set SOUNDFONT_PATH env var to enable MIDI->WAV."
             response["synthesis_error"] = synth_error if 'synth_error' in locals() else "unknown"
@@ -392,7 +509,173 @@ async def generate_audio(
 # ---------- Static file serving helper (dev) ----------
 @app.get("/download")
 def download(path: str):
+    # Secure download: allow only files under GENERATED_DIR
     p = Path(path)
-    if not p.exists():
-        raise HTTPException(404, "File not found")
-    return FileResponse(path=str(p), filename=p.name, media_type="application/octet-stream")
+    # if client passed a relative /files/... style path, accept it
+    try:
+        if str(p).startswith("/files/") or str(p).startswith("files/"):
+            # expected format: /files/{subdir}/{filename}
+            parts = Path(str(p).lstrip("/"))
+            # parts.parts -> ('files','subdir','file')
+            if len(parts.parts) < 3:
+                raise HTTPException(400, "Invalid file path")
+            subdir = parts.parts[1]
+            fname = Path("/".join(parts.parts[2:])).name
+            resolved = (GENERATED_DIR / subdir / fname).resolve()
+        else:
+            resolved = p.resolve()
+    except Exception:
+        raise HTTPException(400, "Invalid path")
+
+    try:
+        gen_dir_resolved = GENERATED_DIR.resolve()
+        if not resolved.exists() or not resolved.is_file() or not resolved.is_relative_to(gen_dir_resolved):
+            raise HTTPException(404, "File not found or not allowed")
+    except AttributeError:
+        # Fallback for older pathlib without is_relative_to (shouldn't happen on py3.11+)
+        try:
+            resolved.relative_to(gen_dir_resolved)
+        except Exception:
+            raise HTTPException(404, "File not found or not allowed")
+
+    return FileResponse(path=str(resolved), filename=resolved.name, media_type="application/octet-stream")
+
+
+# Serve generated files safely under /files/{subdir}/{filename}
+@app.get("/files/{subdir}/{filename}")
+def serve_generated_file(subdir: str, filename: str):
+    p = (GENERATED_DIR / subdir / filename).resolve()
+    gen_dir_resolved = GENERATED_DIR.resolve()
+    try:
+        if not p.exists() or not p.is_file() or not p.is_relative_to(gen_dir_resolved):
+            raise HTTPException(404, "File not found")
+    except AttributeError:
+        try:
+            p.relative_to(gen_dir_resolved)
+        except Exception:
+            raise HTTPException(404, "File not found")
+    return FileResponse(path=str(p), filename=p.name)
+
+
+@app.get("/synthesize")
+def synthesize_midi(path: str):
+    """Synthesize a MIDI file to WAV using fluidsynth (requires SOUNDFONT_PATH). Path should be a /files/... URL or filesystem path."""
+    # resolve path to file under GENERATED_DIR
+    try:
+        p = Path(path)
+        s = str(path)
+        # if the client passed a full URL containing /files/, extract the /files/ path
+        if "/files/" in s:
+            idx = s.index('/files/')
+            s = s[idx:]
+        p = Path(s)
+        if str(p).startswith("/files/") or str(p).startswith("files/"):
+            parts = Path(str(p).lstrip("/"))
+            if len(parts.parts) < 3:
+                raise HTTPException(400, "Invalid file path")
+            subdir = parts.parts[1]
+            fname = Path("/".join(parts.parts[2:])).name
+            resolved = (GENERATED_DIR / subdir / fname).resolve()
+        else:
+            resolved = p.resolve()
+    except Exception:
+        raise HTTPException(400, "Invalid path")
+
+    gen_dir_resolved = GENERATED_DIR.resolve()
+    try:
+        if not resolved.exists() or not resolved.is_file() or not resolved.is_relative_to(gen_dir_resolved):
+            raise HTTPException(404, "File not found or not allowed")
+    except AttributeError:
+        try:
+            resolved.relative_to(gen_dir_resolved)
+        except Exception:
+            raise HTTPException(404, "File not found or not allowed")
+
+    # ensure it's a midi file
+    if resolved.suffix.lower() not in (".mid", ".midi"):
+        raise HTTPException(400, "Provided file is not a MIDI file")
+
+    # output wav path in same directory
+    wav_out = resolved.with_suffix('.wav')
+    try:
+        midi_to_wav(resolved, wav_out)
+    except FileNotFoundError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Synthesis failed: {e}")
+
+    # return the URL to access the wav
+    # find subdir name
+    subdir_name = resolved.parent.name
+    return {"wav": f"/files/{subdir_name}/{wav_out.name}"}
+
+
+# Diagnostic endpoint: tokenize an uploaded MIDI/WAV and optionally map to a model vocab
+@app.post("/tokenize")
+async def tokenize_file(file: UploadFile = File(...), model_id: Optional[str] = Form(None)):
+    fname = Path(file.filename).name
+    tmpdir = Path(tempfile.mkdtemp(prefix="tokenize_"))
+    try:
+        in_path = tmpdir / fname
+        with open(in_path, "wb") as f:
+            f.write(await file.read())
+        tokens = midi_to_sequence_tokens(in_path)
+        resp = {"tokens": tokens}
+        if model_id:
+            models = read_models_catalog()
+            entry = next((m for m in models if m["id"] == model_id), None)
+            if entry is None:
+                raise HTTPException(404, "Model not found")
+            with open(entry["token2idx_path"], "r", encoding="utf-8") as f:
+                token2idx = json.load(f)
+            mapped = []
+            not_found = 0
+            for t in tokens:
+                m = None
+                # reuse encode_seed's mapping logic but for single token
+                def try_map_single(token):
+                    if token in token2idx:
+                        return token2idx[token]
+                    parts = token.split('.')
+                    converted_parts = []
+                    all_numeric = True
+                    for p in parts:
+                        if p.upper().startswith('REST'):
+                            converted_parts.append('REST')
+                            all_numeric = False
+                            continue
+                        try:
+                            n = int(p)
+                            try:
+                                nm = pretty_midi.note_number_to_name(n)
+                            except Exception:
+                                nm = str(n)
+                            nm = nm.replace('b', '-')
+                            converted_parts.append(nm)
+                        except Exception:
+                            all_numeric = False
+                            converted_parts.append(p)
+                    if all_numeric:
+                        cand = '.'.join(converted_parts)
+                        if cand in token2idx:
+                            return token2idx[cand]
+                        cand2 = '.'.join(sorted(converted_parts))
+                        if cand2 in token2idx:
+                            return token2idx[cand2]
+                    alt = token.replace('b', '-')
+                    if alt in token2idx:
+                        return token2idx[alt]
+                    if '<UNK>' in token2idx:
+                        return token2idx['<UNK>']
+                    return None
+                m = try_map_single(t)
+                if m is not None:
+                    mapped.append(m)
+                else:
+                    mapped.append(None)
+                    not_found += 1
+            resp['mapped'] = mapped
+            resp['not_found'] = not_found
+        return JSONResponse(content=resp)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
