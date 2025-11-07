@@ -2,86 +2,539 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <title>MusicGen API Tester</title>
-  <!-- Tone.js and Midi parser for in-browser MIDI playback -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MusicGen API</title>
   <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; background: #f5f5f5; }
-    h1 { color: #333; }
-    .section { background: #fff; padding: 1rem 2rem; margin-bottom: 2rem; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
-    label { font-weight: bold; display: block; margin-top: 1rem; }
-    input, select, button { margin-top: 0.5rem; padding: 0.4rem; width: 100%; max-width: 400px; }
-    button { cursor: pointer; background: #0078d7; color: #fff; border: none; border-radius: 4px; }
-    button:hover { background: #005fa3; }
-    pre { background: #eee; padding: 1rem; border-radius: 4px; white-space: pre-wrap; }
-    img { max-width: 100%; margin-top: 1rem; border-radius: 4px; }
-    /* Player styles */
-    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .btn { background:#0078d7; color:#fff; padding:10px 16px; border-radius:6px; text-decoration:none; display:inline-block; }
-    .btn:disabled { opacity:0.5; cursor:not-allowed; }
-    .pill-audio { background:#111; color:#fff; padding:10px 18px; border-radius:24px; display:inline-flex; align-items:center; gap:12px; }
-    .small { padding:6px 10px; border-radius:6px; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+      min-height: 100vh;
+      padding: 2rem;
+      color: #37474f;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      padding: 2rem;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      color: #5c6bc0;
+      font-size: 2.5rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #78909c;
+      font-size: 1.1rem;
+    }
+
+    .section {
+      background: white;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .section:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 0, 0, 0.12);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 2px solid #e8eaf6;
+    }
+
+    .section-number {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #7986cb 0%, #5c6bc0 100%);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      margin-right: 1rem;
+      font-size: 1.1rem;
+    }
+
+    .section-title {
+      color: #5c6bc0;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    label {
+      font-weight: 600;
+      display: block;
+      margin-top: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: #546e7a;
+      font-size: 0.95rem;
+    }
+
+    input[type="file"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e1f5fe;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: all 0.3s ease;
+      background: #fafafa;
+    }
+
+    /* Make file input look like a primary button that matches the theme */
+    input[type="file"] {
+      width: auto !important;
+      display: inline-block;
+      padding: 0;
+      background: transparent;
+      border: none;
+    }
+
+    /* Style the actual clickable file button (modern browsers) */
+    input[type="file"]::file-selector-button {
+      background: linear-gradient(135deg, #7986cb 0%, #5c6bc0 100%);
+      color: white;
+      border: none;
+      padding: 0.6rem 1rem;
+      margin-right: 0.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input[type="file"]::file-selector-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(93, 114, 179, 0.25);
+    }
+
+    /* WebKit / Blink older pseudo-element */
+    input[type="file"]::-webkit-file-upload-button {
+      background: linear-gradient(135deg, #7986cb 0%, #5c6bc0 100%);
+      color: white;
+      border: none;
+      padding: 0.6rem 1rem;
+      margin-right: 0.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input[type="file"]::-webkit-file-upload-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(93, 114, 179, 0.25);
+    }
+
+    /* Edge/IE browse button */
+    input[type="file"]::-ms-browse {
+      background: linear-gradient(135deg, #7986cb 0%, #5c6bc0 100%);
+      color: white;
+      border: none;
+      padding: 0.6rem 1rem;
+      margin-right: 0.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    input[type="file"]:hover,
+    input[type="number"]:hover,
+    select:hover {
+      border-color: #b3e5fc;
+      background: white;
+    }
+
+    input[type="file"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #7986cb;
+      background: white;
+      box-shadow: 0 0 0 3px rgba(121, 134, 203, 0.1);
+    }
+
+    .input-group {
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-end;
+    }
+
+    .input-group > * {
+      flex: 1;
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(135deg, #7986cb 0%, #5c6bc0 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 2px 8px rgba(121, 134, 203, 0.3);
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(121, 134, 203, 0.4);
+    }
+
+    button:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, #90caf9 0%, #64b5f6 100%);
+      box-shadow: 0 2px 8px rgba(100, 181, 246, 0.3);
+    }
+
+    .btn-small {
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+    }
+
+    .btn-refresh {
+      width: auto;
+      min-width: 120px;
+    }
+
+    pre {
+      background: #f5f5f5;
+      padding: 1.5rem;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      border-left: 4px solid #7986cb;
+      overflow-x: auto;
+      margin-top: 1rem;
+    }
+
+    img {
+      max-width: 100%;
+      margin-top: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 1rem;
+    }
+
+    .message {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .message-info {
+      background: #e3f2fd;
+      color: #1565c0;
+      border-left: 4px solid #1e88e5;
+    }
+
+    .message-success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border-left: 4px solid #43a047;
+    }
+
+    audio {
+      width: 100%;
+      max-width: 400px;
+      margin-top: 1rem;
+      border-radius: 8px;
+    }
+
+    .download-area {
+      padding: 1.5rem;
+      background: #f8f9fa;
+      border-radius: 12px;
+      border: 2px dashed #b3e5fc;
+      text-align: center;
+      color: #78909c;
+    }
+
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 2rem;
+      margin-top: 2rem;
+    }
+
+    .image-container h3 {
+      color: #5c6bc0;
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      font-weight: 600;
+    }
+
+    a.btn {
+      display: inline-block;
+      text-decoration: none;
+      text-align: center;
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 1rem;
+      }
+
+      h1 {
+        font-size: 2rem;
+      }
+
+      .section {
+        padding: 1.5rem;
+      }
+
+      .input-group {
+        flex-direction: column;
+      }
+
+      .controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .controls button {
+        width: 100%;
+      }
+    }
+
+    /* Models dashboard styles (cards grid) */
+    .models-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    .model-card {
+      background: white;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 4px 14px rgba(12, 35, 64, 0.06);
+      border: 1px solid #e8f0fb;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .model-header {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      padding-bottom: 0.25rem;
+      border-bottom: 1px solid #f1f7ff;
+    }
+
+    .model-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #3f51b5;
+    }
+
+    .model-id {
+      font-size: 0.82rem;
+      color: #90caf9;
+      font-family: 'Courier New', monospace;
+    }
+
+    .model-description {
+      color: #455a64;
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+
+    .metrics-section {
+      background: #fafcff;
+      border-radius: 6px;
+      padding: 0.6rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      justify-content: space-between;
+      border-left: 3px solid #90caf9;
+    }
+
+    .accuracy-bar-container {
+      flex: 1;
+      height: 16px;
+      background: #eceff1;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-right: 0.75rem;
+    }
+
+    .accuracy-bar {
+      height: 100%;
+      background: linear-gradient(90deg,#42a5f5,#1e88e5);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      color: white;
+      padding-right: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .accuracy-value {
+      min-width: 54px;
+      text-align: right;
+      color: #1565c0;
+      font-weight: 700;
+    }
+
+    .paths-section {
+      margin-top: 0.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .path-item {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      font-size: 0.85rem;
+      color: #546e7a;
+    }
+
+    .path-label { color: #1976d2; font-weight: 600; min-width: 76px; }
+
+    .best-badge { display:inline-block; background:#42a5f5; color:white; padding:4px 8px; border-radius:6px; font-size:0.75rem; margin-left:8px; }
   </style>
 </head>
 <body>
-  <h1>🎵 MusicGen API Tester</h1>
-
-  <!-- List models -->
-  <div class="section">
-    <h2>1️⃣ Listar modelos disponibles</h2>
-    <button onclick="listModels()">Cargar /models</button>
-    <pre id="models"></pre>
-  </div>
-
-  <!-- Upload section removed (duplicate of Generate -> seed file input) -->
-
-  <!-- Generate -->
-  <div class="section">
-    <h2>3️⃣ Generar música</h2>
-    <label>Model:</label>
-    <div style="display:flex;gap:8px;align-items:center;">
-      <select id="model_select" style="flex:1; padding:0.4rem; max-width:none;">
-        <option value="">Cargar modelos...</option>
-      </select>
-      <button onclick="listModels()" style="width:120px;">Refrescar</button>
-    </div>
-
-    <label>Archivo seed (MIDI o WAV):</label>
-    <input type="file" id="genFile" />
-    <div id="seedControls" style="margin-top:8px;">
-      <div class="controls">
-        <button type="button" id="playSeedBtn" class="btn small" onclick="playSeed()" disabled>Reproducir seed</button>
-        <button type="button" id="pauseSeedBtn" class="btn small" disabled>Pausa</button>
-        <button type="button" id="stopSeedBtn" class="btn small" disabled>Detener</button>
-        <a id="downloadSeedLink" style="display:none;" class="btn small">Descargar seed</a>
+  <div class="container">
+    <header>
+      <!-- Header video (falls back to title if no video selected) -->
+      <div style="position:relative; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px;">
+        <video id="headerVideo" autoplay muted loop playsinline style="width:100%; max-height:280px; border-radius:12px; object-fit:cover; display:block; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"></video>
+        <div id="headerTitle" style="position:absolute; text-align:center; pointer-events:none;">
+          <h1>MusicGen API</h1>
+          <p class="subtitle">Generador de música con inteligencia artificial</p>
+        </div>
       </div>
-      <div id="seedMsg" style="margin-top:6px;color:#666;"></div>
-      <audio id="seedPlayer" controls style="display:none;margin-top:8px;max-width:400px;"></audio>
+    </header>
+
+    <!-- List models -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-number">1</div>
+        <h2 class="section-title">Modelos Disponibles</h2>
+      </div>
+      <button onclick="listModels()">Cargar Modelos</button>
+        <div id="modelsGrid" class="models-grid" style="margin-top:1rem;">
+          <div style="padding:1rem;color:#78909c;border:2px dashed #e1f5fe;border-radius:8px;">Presiona "Cargar Modelos" para ver los modelos disponibles.</div>
+        </div>
     </div>
 
-    <label>Longitud generada (gen_len):</label>
-    <input type="number" id="gen_len" value="50" />
+    <!-- Generate -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-number">2</div>
+        <h2 class="section-title">Generar Música</h2>
+      </div>
 
-    <label>Temperatura:</label>
-    <input type="number" id="temperature" step="0.1" value="1.0" />
+      <label>Modelo:</label>
+      <div class="input-group">
+        <select id="model_select">
+          <option value="">Cargar modelos...</option>
+        </select>
+        <button onclick="listModels()" class="btn-refresh">Refrescar</button>
+      </div>
 
-    <label>Modo:</label>
-    <select id="mode">
-      <option value="from_song">from_song</option>
-      <option value="from_seed">from_seed</option>
-    </select>
+      <label>Archivo Seed (MIDI o WAV):</label>
+      <input type="file" id="genFile" accept=".mid,.midi,.wav,.mp3" />
+      
+      <div id="seedControls" style="margin-top: 1rem;">
+        <div class="controls">
+          <button type="button" id="playSeedBtn" class="btn-small btn-secondary" onclick="playSeed()" disabled>
+            Reproducir Seed
+          </button>
+          <button type="button" id="pauseSeedBtn" class="btn-small btn-secondary" disabled>
+            Pausa
+          </button>
+          <button type="button" id="stopSeedBtn" class="btn-small btn-secondary" disabled>
+            Detener
+          </button>
+        </div>
+        <div id="seedMsg" class="message message-info" style="display: none;"></div>
+        <audio id="seedPlayer" controls style="display:none;"></audio>
+      </div>
 
-    <button onclick="generateMusic()">Generar</button>
-    <pre id="generateResult"></pre>
-    <div id="images"></div>
-  </div>
+      <label>Longitud Generada:</label>
+      <input type="number" id="gen_len" value="50" min="1" max="500" />
 
-  <!-- Download -->
-  <div class="section">
-    <h2>4️⃣ Descargar y escuchar</h2>
-    <div id="downloadArea">
-      <p>Después de generar, aquí aparecerán botones para descargar y reproducir el archivo generado.</p>
+      <label>Temperatura:</label>
+      <input type="number" id="temperature" step="0.1" value="1.0" min="0.1" max="2.0" />
+
+      <label>Modo de Generación:</label>
+      <select id="mode">
+        <option value="from_song">Desde Canción Completa</option>
+        <option value="from_seed">Desde Seed</option>
+      </select>
+
+      <button onclick="generateMusic()" style="margin-top: 1.5rem; width: 100%;">
+        Generar Música
+      </button>
+      
+      <pre id="generateResult" style="display: none;"></pre>
+      <div id="images" class="image-grid"></div>
+    </div>
+
+    <!-- Download -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-number">3</div>
+        <h2 class="section-title">Descargar y Reproducir</h2>
+      </div>
+      <div id="downloadArea" class="download-area">
+        <p>Después de generar, aquí aparecerán los archivos generados para descargar y reproducir.</p>
+      </div>
     </div>
   </div>
 
@@ -89,42 +542,100 @@
     const API_BASE = "http://localhost:8000";
 
     async function listModels() {
-      const res = await fetch(`${API_BASE}/models`);
+      const grid = document.getElementById('modelsGrid');
+      const sel = document.getElementById('model_select');
+      grid.innerHTML = `<div style="padding:1rem;color:#78909c;border:2px dashed #e1f5fe;border-radius:8px;">Cargando modelos...</div>`;
+      sel.innerHTML = '';
+      try {
+        const res = await fetch(`${API_BASE}/models`);
         const data = await res.json();
-        document.getElementById("models").textContent = JSON.stringify(data, null, 2);
-        // populate select
-        const sel = document.getElementById('model_select');
-        sel.innerHTML = '';
-        if (data && data.models && data.models.length) {
-          data.models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = `${m.id} — ${m.name || ''}`;
-            sel.appendChild(opt);
-          });
-        } else {
-          const opt = document.createElement('option'); opt.value = ''; opt.textContent = 'No models found'; sel.appendChild(opt);
+
+        const models = (data && data.models) ? data.models : [];
+        if (!models.length) {
+          grid.innerHTML = `<div style="padding:1rem;color:#78909c;border:2px dashed #e1f5fe;border-radius:8px;">No se encontraron modelos.</div>`;
+          const opt = document.createElement('option'); opt.value = ''; opt.textContent = 'No se encontraron modelos'; sel.appendChild(opt);
+          return;
         }
+
+        // populate select
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id; opt.textContent = `${m.id} — ${m.name || ''}`;
+          sel.appendChild(opt);
+        });
+
+        // compute best accuracy if available
+        let bestAcc = -1;
+        models.forEach(m => { if (m.metrics && typeof m.metrics.val_accuracy === 'number') bestAcc = Math.max(bestAcc, m.metrics.val_accuracy); });
+
+        // render cards
+        grid.innerHTML = '';
+        models.forEach(m => {
+          const card = document.createElement('div');
+          card.className = 'model-card';
+          const acc = (m.metrics && typeof m.metrics.val_accuracy === 'number') ? m.metrics.val_accuracy : null;
+          const accPercent = acc !== null ? Math.round(acc * 1000)/10 : 0;
+          const isBest = (acc !== null && acc === bestAcc);
+
+          card.innerHTML = `
+            <div class="model-header">
+              <div class="model-name">${m.name || m.id} ${isBest ? '<span class="best-badge">Mejor</span>' : ''}</div>
+              <div class="model-id">${m.id}</div>
+            </div>
+            <div class="model-description">${m.description || ''}</div>
+            <div class="metrics-section">
+              <div style="display:flex;align-items:center;width:100%;">
+                <div class="accuracy-bar-container">
+                  <div class="accuracy-bar" style="width:${acc !== null ? accPercent + '%' : '0%'}">${acc !== null ? accPercent + '%' : ''}</div>
+                </div>
+                <div class="accuracy-value">${acc !== null ? acc.toFixed(3) : ''}</div>
+              </div>
+              <div>
+                <button class="btn btn-small" onclick="selectModel('${m.id}')">Usar</button>
+              </div>
+            </div>
+            <div class="paths-section">
+              <div class="path-item"><span class="path-label">Modelo:</span><span class="path-value">${m.model_path || ''}</span></div>
+              <div class="path-item"><span class="path-label">Tokens:</span><span class="path-value">${m.token2idx_path || ''}</span></div>
+            </div>
+          `;
+
+          grid.appendChild(card);
+        });
+
+      } catch (error) {
+        grid.innerHTML = `<div style="padding:1rem;color:#b71c1c;background:#fff1f1;border-radius:8px;border:1px solid #ffebee;">Error cargando modelos: ${error.message}</div>`;
+        const opt = document.createElement('option'); opt.value = ''; opt.textContent = 'Error cargando modelos'; sel.appendChild(opt);
+      }
     }
 
-    async function uploadFile() {
-      const fileInput = document.getElementById("uploadFile");
-      if (!fileInput.files.length) return alert("Selecciona un archivo primero");
-      const formData = new FormData();
-      formData.append("file", fileInput.files[0]);
-      const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
-      const data = await res.json();
-      document.getElementById("uploadResult").textContent = JSON.stringify(data, null, 2);
+    function selectModel(modelId){
+      try {
+        const sel = document.getElementById('model_select');
+        sel.value = modelId;
+        // scroll into view the generate section
+        const genSection = document.querySelector('.section:nth-of-type(2)');
+        if (genSection) genSection.scrollIntoView({behavior:'smooth'});
+      } catch(e){ console.warn(e); }
     }
 
     async function generateMusic() {
-  const modelSelect = document.getElementById("model_select");
-  const model_id = modelSelect ? modelSelect.value : document.getElementById("model_id")?.value;
+      const modelSelect = document.getElementById("model_select");
+      const model_id = modelSelect.value;
       const gen_len = document.getElementById("gen_len").value;
       const temperature = document.getElementById("temperature").value;
       const mode = document.getElementById("mode").value;
       const fileInput = document.getElementById("genFile");
-      if (!fileInput.files.length) return alert("Selecciona un archivo seed primero");
+      
+      if (!model_id) {
+        alert("Por favor selecciona un modelo primero");
+        return;
+      }
+      
+      if (!fileInput.files.length) {
+        alert("Por favor selecciona un archivo seed primero");
+        return;
+      }
 
       const formData = new FormData();
       formData.append("model_id", model_id);
@@ -133,161 +644,273 @@
       formData.append("mode", mode);
       formData.append("file", fileInput.files[0]);
 
-      const res = await fetch(`${API_BASE}/generate`, { method: "POST", body: formData });
-  const data = await res.json();
-  // hide server-side synthesis notes/errors from the displayed JSON
-  const displayData = Object.assign({}, data);
-  try { delete displayData.synthesis_note; delete displayData.synthesis_error; } catch(e){}
-  document.getElementById("generateResult").textContent = JSON.stringify(displayData, null, 2);
+      try {
+        const res = await fetch(`${API_BASE}/generate`, { method: "POST", body: formData });
+        const data = await res.json();
+        
+        const displayData = Object.assign({}, data);
+        try { 
+          delete displayData.synthesis_note; 
+          delete displayData.synthesis_error; 
+        } catch(e){}
+        
+        const resultPre = document.getElementById("generateResult");
+        resultPre.textContent = JSON.stringify(displayData, null, 2);
+        resultPre.style.display = 'block';
 
-      if (data.files) {
-        const imgDiv = document.getElementById("images");
-        imgDiv.innerHTML = "";
-        // data.files now contains relative URLs like /files/{subdir}/{file}
-        if (data.files.pianoroll_seed) {
-          const url = data.files.pianoroll_seed.startsWith("/") ? API_BASE + data.files.pianoroll_seed : data.files.pianoroll_seed;
-          imgDiv.innerHTML += `<h3>Piano Roll Seed</h3><img src="${url}" />`;
-        }
-        if (data.files.pianoroll_gen) {
-          const url = data.files.pianoroll_gen.startsWith("/") ? API_BASE + data.files.pianoroll_gen : data.files.pianoroll_gen;
-          imgDiv.innerHTML += `<h3>Piano Roll Generado</h3><img src="${url}" />`;
-        }
+        if (data.files) {
+          const imgDiv = document.getElementById("images");
+          imgDiv.innerHTML = "";
+          
+          if (data.files.pianoroll_seed) {
+            const url = data.files.pianoroll_seed.startsWith("/") ? API_BASE + data.files.pianoroll_seed : data.files.pianoroll_seed;
+            imgDiv.innerHTML += `<div class="image-container"><h3>Piano Roll - Seed</h3><img src="${url}" /></div>`;
+          }
+          if (data.files.pianoroll_gen) {
+            const url = data.files.pianoroll_gen.startsWith("/") ? API_BASE + data.files.pianoroll_gen : data.files.pianoroll_gen;
+            imgDiv.innerHTML += `<div class="image-container"><h3>Piano Roll - Generado</h3><img src="${url}" /></div>`;
+          }
 
-        // handle downloads and playback (inside generateMusic)
-        const dlArea = document.getElementById('downloadArea');
-        dlArea.innerHTML = '';
-        if (data.files && data.files.midi) {
-          const midiUrl = data.files.midi.startsWith('/') ? API_BASE + data.files.midi : data.files.midi;
-          const a = document.createElement('a');
-          a.href = midiUrl;
-          try { const parts = midiUrl.split('/'); a.download = parts[parts.length-1] || 'generated.mid'; } catch(e){ a.download = 'generated.mid'; }
-          a.textContent = 'Descargar MIDI';
-          a.style.display = 'inline-block';
-          a.style.marginRight = '12px';
-          a.className = 'btn';
-          a.target = '_blank';
-          dlArea.appendChild(a);
-          // add browser playback button (uses Tone.js + Midi parser)
-          const playBtn = document.createElement('button');
-          playBtn.textContent = 'Reproducir MIDI (navegador)';
-          playBtn.style.marginLeft = '8px';
-          playBtn.className = 'btn';
-          playBtn.dataset.midiPlayer = 'true';
-          const pauseBtn = document.createElement('button');
-          pauseBtn.textContent = 'Pausa';
-          pauseBtn.style.marginLeft = '8px'; pauseBtn.className='btn'; pauseBtn.disabled = true;
-          const resumeBtn = document.createElement('button');
-          resumeBtn.textContent = 'Continuar';
-          resumeBtn.style.marginLeft = '8px'; resumeBtn.className='btn'; resumeBtn.disabled = true;
-          const stopBtn = document.createElement('button');
-          stopBtn.textContent = 'Detener reproducción';
-          stopBtn.style.marginLeft = '8px';
-          stopBtn.className = 'btn';
-          stopBtn.disabled = true;
-          const restartBtn = document.createElement('button');
-          restartBtn.textContent = 'Reiniciar'; restartBtn.className='btn'; restartBtn.style.marginLeft='8px'; restartBtn.disabled = true;
-          playBtn.onclick = async () => {
-            try { await Tone.start(); } catch(e){}
-            // normalize midiUrl to server-relative path if needed
+          const dlArea = document.getElementById('downloadArea');
+          dlArea.innerHTML = '';
+          dlArea.className = '';
+          
+          if (data.files && data.files.midi) {
+            const midiUrl = data.files.midi.startsWith('/') ? API_BASE + data.files.midi : data.files.midi;
+            
+            const controlsDiv = document.createElement('div');
+            controlsDiv.className = 'controls';
+            controlsDiv.style.justifyContent = 'center';
+            
+            const a = document.createElement('a');
+            a.href = midiUrl;
+            try { 
+              const parts = midiUrl.split('/'); 
+              a.download = parts[parts.length-1] || 'generated.mid'; 
+            } catch(e){ 
+              a.download = 'generated.mid'; 
+            }
+            a.textContent = 'Descargar MIDI';
+            a.className = 'btn';
+            a.target = '_blank';
+            
+            const playBtn = document.createElement('button');
+            playBtn.textContent = 'Reproducir MIDI';
+            playBtn.className = 'btn btn-secondary';
+            playBtn.dataset.midiPlayer = 'true';
+            
+            const pauseBtn = document.createElement('button');
+            pauseBtn.textContent = 'Pausa';
+            pauseBtn.className = 'btn btn-secondary btn-small';
+            pauseBtn.disabled = true;
+            
+            const resumeBtn = document.createElement('button');
+            resumeBtn.textContent = 'Continuar';
+            resumeBtn.className = 'btn btn-secondary btn-small';
+            resumeBtn.disabled = true;
+            
+            const stopBtn = document.createElement('button');
+            stopBtn.textContent = 'Detener';
+            stopBtn.className = 'btn btn-secondary btn-small';
+            stopBtn.disabled = true;
+            
+            const restartBtn = document.createElement('button');
+            restartBtn.textContent = 'Reiniciar';
+            restartBtn.className = 'btn btn-secondary btn-small';
+            restartBtn.disabled = true;
+            
             let pathForSynth = midiUrl;
             try {
               const origin = new URL(API_BASE).origin;
               if (pathForSynth.startsWith(origin)) pathForSynth = pathForSynth.slice(origin.length);
             } catch (e) {}
+            
+            playBtn.onclick = async () => {
+              try { await Tone.start(); } catch(e){}
               if (_midiPlayer.started) {
                 stopMidi();
               } else {
                 await playMidiFromUrl(pathForSynth);
-                playBtn.disabled = true; pauseBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; resumeBtn.disabled = true;
+                playBtn.disabled = true; 
+                pauseBtn.disabled = false; 
+                stopBtn.disabled = false; 
+                restartBtn.disabled = false; 
+                resumeBtn.disabled = true;
               }
-          };
-            stopBtn.onclick = () => { stopMidi(); playBtn.disabled = false; pauseBtn.disabled = true; resumeBtn.disabled = true; stopBtn.disabled = true; restartBtn.disabled = true; };
-            pauseBtn.onclick = () => { pauseMidi(); pauseBtn.disabled = true; resumeBtn.disabled = false; };
-            resumeBtn.onclick = () => { resumeMidi(); resumeBtn.disabled = true; pauseBtn.disabled = false; };
-            restartBtn.onclick = async () => { stopMidi(); await playMidiFromUrl(pathForSynth); playBtn.disabled = true; pauseBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; resumeBtn.disabled = true; };
-          dlArea.appendChild(playBtn);
-            dlArea.appendChild(pauseBtn);
-            dlArea.appendChild(resumeBtn);
-            dlArea.appendChild(stopBtn);
-            dlArea.appendChild(restartBtn);
+            };
+            
+            stopBtn.onclick = () => { 
+              stopMidi(); 
+              playBtn.disabled = false; 
+              pauseBtn.disabled = true; 
+              resumeBtn.disabled = true; 
+              stopBtn.disabled = true; 
+              restartBtn.disabled = true; 
+            };
+            
+            pauseBtn.onclick = () => { 
+              pauseMidi(); 
+              pauseBtn.disabled = true; 
+              resumeBtn.disabled = false; 
+            };
+            
+            resumeBtn.onclick = () => { 
+              resumeMidi(); 
+              resumeBtn.disabled = true; 
+              pauseBtn.disabled = false; 
+            };
+            
+            restartBtn.onclick = async () => { 
+              stopMidi(); 
+              await playMidiFromUrl(pathForSynth); 
+              playBtn.disabled = true; 
+              pauseBtn.disabled = false; 
+              stopBtn.disabled = false; 
+              restartBtn.disabled = false; 
+              resumeBtn.disabled = true; 
+            };
+            
+            controlsDiv.appendChild(a);
+            controlsDiv.appendChild(playBtn);
+            controlsDiv.appendChild(pauseBtn);
+            controlsDiv.appendChild(resumeBtn);
+            controlsDiv.appendChild(stopBtn);
+            controlsDiv.appendChild(restartBtn);
+            
+            dlArea.appendChild(controlsDiv);
+          }
         }
-
-        // (WAV playback intentionally omitted; browser MIDI playback used instead)
+      } catch (error) {
+        alert(`Error: ${error.message}`);
       }
     }
 
-    // populate models on load
     listModels();
 
-    // handle seed file local preview/playback when user selects a file
+    // Try to load the repository header video if present: app/data/Music Generator.mp4 mounted at /static
+    async function tryLoadDefaultHeaderVideo(){
+      const vidName = 'Music Generator.mp4';
+      const candidates = [
+        `${API_BASE}/static/${encodeURIComponent(vidName)}`,
+        `${API_BASE}/static/${vidName}`
+      ];
+      const vid = document.getElementById('headerVideo');
+      const title = document.getElementById('headerTitle');
+
+      function loadCandidate(url){
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const onLoaded = () => { if (!settled) { settled = true; cleanup(); resolve(true); } };
+          const onError = () => { if (!settled) { settled = true; cleanup(); resolve(false); } };
+          const cleanup = () => {
+            vid.removeEventListener('loadedmetadata', onLoaded);
+            vid.removeEventListener('error', onError);
+            clearTimeout(timeoutId);
+          };
+          vid.addEventListener('loadedmetadata', onLoaded);
+          vid.addEventListener('error', onError);
+          vid.src = url;
+          // try to play (silenced autoplay should be allowed)
+          vid.play().catch(()=>{});
+          const timeoutId = setTimeout(() => { if (!settled) { settled = true; cleanup(); resolve(false); } }, 1500);
+        });
+      }
+
+      for (const c of candidates) {
+        try {
+          const ok = await loadCandidate(c);
+          if (ok) {
+            if (title) title.style.display = 'none';
+            return;
+          }
+        } catch(e) { /* ignore and try next */ }
+      }
+      // none worked: ensure title visible
+      if (title) title.style.display = 'block';
+      // clear any attempted src
+      try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch(e){}
+    }
+    tryLoadDefaultHeaderVideo();
+
     document.getElementById('genFile').addEventListener('change', function(e){
       const f = this.files && this.files[0];
       const seedPlayer = document.getElementById('seedPlayer');
       const playSeedBtn = document.getElementById('playSeedBtn');
-      const downloadSeedLink = document.getElementById('downloadSeedLink');
+      const pauseSeedBtn = document.getElementById('pauseSeedBtn');
+      const stopSeedBtn = document.getElementById('stopSeedBtn');
       const seedMsg = document.getElementById('seedMsg');
-  seedPlayer.style.display = 'none';
-  // disable controls until a valid file is selected
-  try { playSeedBtn.disabled = true; pauseSeedBtn.disabled = true; stopSeedBtn.disabled = true; } catch(e){}
-  downloadSeedLink.style.display='none'; seedMsg.textContent='';
+      
+      seedPlayer.style.display = 'none';
+      playSeedBtn.disabled = true; 
+      pauseSeedBtn.disabled = true; 
+      stopSeedBtn.disabled = true;
+      seedMsg.style.display = 'none';
+      seedMsg.textContent = '';
+      
       if (!f) return;
+      
       const name = f.name || '';
       const lower = name.toLowerCase();
-      // treat MIDI files by extension first (browsers usually can't play .mid in <audio>)
+      
       if (lower.endsWith('.mid') || lower.endsWith('.midi')) {
-        // enable local MIDI playback using Tone.js (read file and schedule notes)
-  // enable controls for MIDI seed
-  playSeedBtn.disabled = false; pauseSeedBtn.disabled = true; stopSeedBtn.disabled = true;
-        playSeedBtn.textContent = 'Reproducir seed';
-        pauseSeedBtn.textContent = 'Pausa';
-        stopSeedBtn.textContent = 'Detener';
-        // click handlers
+        playSeedBtn.disabled = false;
         playSeedBtn.onclick = async () => {
-          seedMsg.textContent = '';
+          seedMsg.style.display = 'none';
           try {
-            console.log('Seed play clicked');
             await Tone.start();
-            playSeedBtn.disabled = true; pauseSeedBtn.disabled = false; stopSeedBtn.disabled = false;
-            playSeedBtn.textContent = 'Reproduciendo...';
+            playSeedBtn.disabled = true; 
+            pauseSeedBtn.disabled = false; 
+            stopSeedBtn.disabled = false;
             const ab = await f.arrayBuffer();
             await playMidiFromArrayBuffer(ab);
             seedMsg.textContent = 'Reproduciendo seed...';
+            seedMsg.className = 'message message-success';
+            seedMsg.style.display = 'block';
           } catch (e) {
             console.error('Error reproduciendo MIDI local:', e);
-            seedMsg.textContent = 'No fue posible reproducir el MIDI localmente. Mira la consola (F12).';
+            seedMsg.textContent = 'No fue posible reproducir el MIDI localmente.';
+            seedMsg.className = 'message message-info';
+            seedMsg.style.display = 'block';
           } finally {
             playSeedBtn.disabled = false;
-            playSeedBtn.textContent = 'Reproducir seed';
           }
         };
-  pauseSeedBtn.onclick = () => { pauseMidi(); pauseSeedBtn.disabled = true; playSeedBtn.disabled = false; };
-  stopSeedBtn.onclick = () => { stopMidi(); pauseSeedBtn.disabled = true; playSeedBtn.disabled = false; stopSeedBtn.disabled = true; };
-        seedMsg.textContent = 'Archivo MIDI local listo para reproducir. Usa el botón "Reproducir seed".';
-        // hide download link for local MIDI (no need to download what you already have)
-        downloadSeedLink.style.display='none';
+        
+        pauseSeedBtn.onclick = () => { 
+          pauseMidi(); 
+          pauseSeedBtn.disabled = true; 
+          playSeedBtn.disabled = false; 
+        };
+        
+        stopSeedBtn.onclick = () => { 
+          stopMidi(); 
+          pauseSeedBtn.disabled = true; 
+          playSeedBtn.disabled = false; 
+          stopSeedBtn.disabled = true; 
+        };
+        
+        seedMsg.textContent = 'Archivo MIDI listo para reproducir.';
+        seedMsg.className = 'message message-info';
+        seedMsg.style.display = 'block';
       } else if (f.type.startsWith('audio/') || lower.endsWith('.wav') || lower.endsWith('.mp3') || lower.endsWith('.ogg')) {
         const url = URL.createObjectURL(f);
-        seedPlayer.src = url; seedPlayer.style.display='block';
-  playSeedBtn.disabled = false;
+        seedPlayer.src = url; 
+        seedPlayer.style.display='block';
+        playSeedBtn.disabled = false;
         playSeedBtn.onclick = async () => {
           try {
             await seedPlayer.play();
           } catch (e) {
-            console.error('Error reproduciendo audio nativo:', e);
-            // if the file is actually a MIDI misreported as audio, suggest using the MIDI player
-            if (lower.endsWith('.mid') || lower.endsWith('.midi')) {
-              seedMsg.textContent = 'El navegador no reproduce MIDI en el elemento <audio>. Usa el botón "Reproducir seed" para reproducir vía sintetizador del navegador.';
-            } else {
-              seedMsg.textContent = 'No se puede reproducir este archivo en el navegador.';
-            }
+            console.error('Error reproduciendo audio:', e);
+            seedMsg.textContent = 'No se puede reproducir este archivo en el navegador.';
+            seedMsg.className = 'message message-info';
+            seedMsg.style.display = 'block';
           }
         };
-        // hide download link for uploaded seed (user already has the file)
-        downloadSeedLink.style.display='none';
-        seedMsg.textContent = '';
-      
       } else {
-        seedMsg.textContent = 'Archivo no reconocible para reproducción en navegador.';
+        seedMsg.textContent = 'Archivo no reconocible para reproducción.';
+        seedMsg.className = 'message message-info';
+        seedMsg.style.display = 'block';
       }
     });
 
@@ -296,7 +919,6 @@
       if(seedPlayer && seedPlayer.src){ seedPlayer.play(); }
     }
 
-    // ---- In-browser MIDI playback using Tone.js + @tonejs/midi ----
     let _midiPlayer = {
       nowPart: null,
       synths: [],
@@ -304,24 +926,20 @@
     };
 
     async function playMidiFromUrl(url){
-      try {
-        await Tone.start();
-      } catch(e){ /* user gesture required in some browsers; ignore */ }
+      try { await Tone.start(); } catch(e){}
       try { Tone.getDestination().volume.value = -3; } catch(e){}
-      // if already playing, stop first
+      
       if (_midiPlayer.started) {
         stopMidi();
         return;
       }
-  // fetch midi as arraybuffer (or accept a relative URL)
-  const resp = await fetch(url);
-  const ab = await resp.arrayBuffer();
-  const midi = new Midi(ab);
+      
+      const resp = await fetch(url);
+      const ab = await resp.arrayBuffer();
+      const midi = new Midi(ab);
 
-      // We'll schedule notes directly with Tone.now()+note.time to avoid Transport issues
       try {
         if (midi.header && midi.header.tempos && midi.header.tempos.length) {
-          // set a reasonable bpm for timebase only; not required for scheduling by seconds
           Tone.Transport.bpm.value = midi.header.tempos[0].bpm;
         }
       } catch (e) {}
@@ -329,26 +947,21 @@
       const maxTracks = Math.min(6, midi.tracks.length);
       _midiPlayer.synths = [];
       const scheduled = [];
-      const base = Tone.now() + 0.1; // small offset so audio context wakes
+      const base = Tone.now() + 0.1;
 
-      // create one louder poly synth per track and schedule notes by absolute seconds
       for (let i = 0; i < maxTracks; i++) {
         const track = midi.tracks[i];
         if (!track || !track.notes || track.notes.length === 0) continue;
-        // Use a robust synth voice and slightly higher gain; 8 voices
         const synth = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8 }).toDestination();
         try { synth.volume.value = -6; } catch(e){}
         _midiPlayer.synths.push(synth);
 
         for (const n of track.notes) {
-          // some notes may lack velocity; default to 0.9
           const vel = (typeof n.velocity === 'number' && n.velocity > 0) ? n.velocity : 0.9;
           const start = base + (n.time || 0);
           const dur = n.duration || 0.5;
-          // schedule an attack/release at absolute audio time
           const ev = { synth, note: n.name, when: start, dur, vel };
           scheduled.push(ev);
-          // schedule via setTimeout to call synth.triggerAttackRelease at right time
           const delay = Math.max(0, (start - Tone.now()) * 1000);
           const tId = setTimeout(() => {
             try { ev.synth.triggerAttackRelease(ev.note, ev.dur, undefined, ev.vel); } catch (e) {}
@@ -357,15 +970,13 @@
         }
       }
 
-  _midiPlayer.nowPart = scheduled;
-  _midiPlayer.started = true;
-  _midiPlayer.paused = false;
-      // stop after midi.duration
+      _midiPlayer.nowPart = scheduled;
+      _midiPlayer.started = true;
+      _midiPlayer.paused = false;
       const total = (midi.duration || 30);
       _midiPlayer.stopTimeout = setTimeout(() => stopMidi(), (total + 1) * 1000);
     }
 
-    // Pause: clear timers and store remaining time for each event
     function pauseMidi(){
       if (!_midiPlayer.started || _midiPlayer.paused) return;
       const now = Tone.now();
@@ -373,21 +984,17 @@
         _midiPlayer.nowPart.forEach(ev => {
           try {
             if (ev._timer) { clearTimeout(ev._timer); ev._timer = null; }
-            // remaining time in seconds
             ev.remaining = Math.max(0, (ev.when - now));
           } catch(e){}
         });
       }
-      // stop currently sounding notes by disposing synths and recreate later
       if (_midiPlayer.synths) {
         _midiPlayer.synths.forEach(s => { try{ s.releaseAll && s.releaseAll(); }catch(e){} });
       }
       if (_midiPlayer.stopTimeout) { clearTimeout(_midiPlayer.stopTimeout); _midiPlayer.stopTimeout = null; }
       _midiPlayer.paused = true;
-      console.log('Playback paused');
     }
 
-    // Resume: schedule remaining events again relative to now
     function resumeMidi(){
       if (!_midiPlayer.started || !_midiPlayer.paused) return;
       const base = Tone.now() + 0.05;
@@ -395,7 +1002,7 @@
         _midiPlayer.nowPart.forEach(ev => {
           try {
             const rem = (typeof ev.remaining === 'number') ? ev.remaining : Math.max(0, ev.when - Tone.now());
-            if (rem <= 0) return; // skip
+            if (rem <= 0) return;
             ev.when = base + rem;
             const delay = Math.max(0, (ev.when - Tone.now()) * 1000);
             ev._timer = setTimeout(() => {
@@ -404,23 +1011,18 @@
           } catch(e){ console.error('resume schedule error', e); }
         });
       }
-      // re-arm auto-stop
-      // find longest remaining
       let maxRem = 0;
       if (_midiPlayer.nowPart) {
         _midiPlayer.nowPart.forEach(ev => { if (ev && typeof ev.remaining === 'number') maxRem = Math.max(maxRem, ev.remaining); });
       }
       _midiPlayer.stopTimeout = setTimeout(() => { stopMidi(); }, Math.round((maxRem + 1) * 1000));
       _midiPlayer.paused = false;
-      console.log('Playback resumed');
     }
 
-    // Play from an ArrayBuffer (used for local File objects)
     async function playMidiFromArrayBuffer(arrayBuffer){
       try { await Tone.start(); } catch(e){}
       try { Tone.getDestination().volume.value = -3; } catch(e){}
       if (_midiPlayer.started) stopMidi();
-      console.log('playMidiFromArrayBuffer: parsed midi, scheduling...');
       const midi = new Midi(arrayBuffer);
 
       try {
@@ -457,17 +1059,12 @@
 
       _midiPlayer.nowPart = scheduled;
       _midiPlayer.started = true;
-      console.log('Scheduled', scheduled.length, 'note events; total duration', midi.duration);
       const total = (midi.duration || 30);
-      _midiPlayer.stopTimeout = setTimeout(() => {
-        console.log('Auto stopping after duration');
-        stopMidi();
-      }, (total + 1) * 1000);
+      _midiPlayer.stopTimeout = setTimeout(() => { stopMidi(); }, (total + 1) * 1000);
     }
 
     function stopMidi(){
       if (_midiPlayer.nowPart) {
-        // cancel any scheduled timers for note events
         _midiPlayer.nowPart.forEach(ev => {
           try { if (ev && ev._timer) clearTimeout(ev._timer); } catch(e){}
         });
@@ -478,8 +1075,7 @@
         _midiPlayer.synths = [];
       }
       if (_midiPlayer.stopTimeout) { clearTimeout(_midiPlayer.stopTimeout); _midiPlayer.stopTimeout = null; }
-  try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch(e) {}
-      // reset any play buttons
+      try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch(e) {}
       document.querySelectorAll('button[data-midi-player="true"]').forEach(b => { b.textContent = 'Reproducir MIDI (navegador)'; });
       _midiPlayer.started = false;
     }
