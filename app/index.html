@@ -487,6 +487,35 @@
 
   /* responsive wrapping for the files container */
   #genFilesArea > div { display:flex; gap:12px; flex-wrap:wrap; }
+
+  .loader {
+    display: inline-block;
+    width: fit-content;
+    font-weight: 700;
+    font-family: monospace;
+    font-size: 18px;
+    line-height: 1;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background-color: rgba(255,255,255,0.85);
+    box-shadow: 0 4px 12px rgba(12,35,64,0.06);
+    animation: l24 1s infinite alternate linear;
+  }
+  .loader::before {
+    content: "Loading...";
+    line-height: 1em;
+    color: transparent;
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+    /* readable gradient text */
+    background-image: linear-gradient(90deg,#5c6bc0 0%, #7986cb 50%, #9fa8da 100%);
+  }
+
+  @keyframes l24{
+    100%{background-position: left}
+  }
+  #generateLoader { display: none; margin: 12px auto 0; text-align: center; }
   </style>
 </head>
 <body>
@@ -560,9 +589,10 @@
         <option value="from_seed">Desde Seed</option>
       </select>
 
-      <button onclick="generateMusic()" style="margin-top: 1.5rem; width: 100%;">
+      <button id="generateBtn" onclick="generateMusic()" style="margin-top: 1.5rem; width: 100%;">
         Generar Música
       </button>
+      <div id="generateLoader" class="loader" style="display:none; margin-top:1rem;"></div>
       
       <pre id="generateResult" style="display: none;"></pre>
       <div id="images" class="image-grid"></div>
@@ -699,6 +729,8 @@
       const temperature = document.getElementById("temperature").value;
       const mode = document.getElementById("mode").value;
       const fileInput = document.getElementById("genFile");
+      const generateBtn = document.getElementById('generateBtn');
+      const loader = document.getElementById('generateLoader');
       
       if (!model_id) {
         alert("Por favor selecciona un modelo primero");
@@ -710,14 +742,20 @@
         return;
       }
 
-      const formData = new FormData();
-      formData.append("model_id", model_id);
-      formData.append("gen_len", gen_len);
-      formData.append("temperature", temperature);
-      formData.append("mode", mode);
-      formData.append("file", fileInput.files[0]);
-
+      // show loader & disable button
       try {
+        generateBtn.disabled = true;
+  if (loader) loader.style.display = 'block';
+        const originalText = generateBtn.textContent;
+        generateBtn.textContent = 'Generando...';
+
+        const formData = new FormData();
+        formData.append("model_id", model_id);
+        formData.append("gen_len", gen_len);
+        formData.append("temperature", temperature);
+        formData.append("mode", mode);
+        formData.append("file", fileInput.files[0]);
+
         const res = await fetch(`${API_BASE}/generate`, { method: "POST", body: formData });
         const data = await res.json();
         
@@ -727,9 +765,9 @@
           delete displayData.synthesis_error; 
         } catch(e){}
         
-  const resultPre = document.getElementById("generateResult");
-  resultPre.textContent = JSON.stringify(displayData, null, 2);
-  resultPre.style.display = 'none';
+        const resultPre = document.getElementById("generateResult");
+        resultPre.textContent = JSON.stringify(displayData, null, 2);
+        resultPre.style.display = 'none';
 
         if (data.files) {
           const imgDiv = document.getElementById("images");
@@ -857,6 +895,10 @@
         }
       } catch (error) {
         alert(`Error: ${error.message}`);
+      } finally {
+        // hide loader & re-enable
+  try { if (loader) loader.style.display = 'none'; } catch(e){}
+        try { generateBtn.disabled = false; generateBtn.textContent = 'Generar Música'; } catch(e){}
       }
     }
 
