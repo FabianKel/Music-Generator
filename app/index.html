@@ -445,6 +445,22 @@
     .path-label { color: #1976d2; font-weight: 600; min-width: 76px; }
 
     .best-badge { display:inline-block; background:#42a5f5; color:white; padding:4px 8px; border-radius:6px; font-size:0.75rem; margin-left:8px; }
+  /* Generation piano & token styles */
+  .piano-container { overflow-x: auto; padding: 6px 0; }
+  .piano { position: relative; display: block; height: 140px; }
+  .key { box-sizing: border-box; display: inline-flex; align-items: flex-end; justify-content: center; padding-bottom:8px; font-size:0.75rem; font-weight:600; cursor:pointer; user-select:none; }
+  .white-key { width:40px; height:140px; background:white; border:1px solid #cfd8dc; border-radius:4px; margin-right:4px; position:relative; z-index:1; }
+  .white-key:hover { background:#f5f7fb; }
+  .black-key { width:26px; height:92px; background:#222; color:white; border-radius:3px; position:absolute; z-index:2; margin-left:-13px; }
+  .black-key:hover { background:#444; }
+  .key.active { background:#42a5f5 !important; color:white; }
+
+  .token-display { margin-top: 8px; padding: 10px; background:#f8f9fb; border-radius:8px; max-height:320px; overflow:auto; }
+  .token-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
+  .token { background:white; border:1px solid #e3f2fd; padding:8px; border-radius:6px; text-align:center; font-family: 'Courier New', monospace; color:#1565c0; cursor:pointer; }
+  .token.unknown { background:#ffebee; border-color:#ffcdd2; color:#c62828; }
+  .token.rest { background:#e8f5e9; border-color:#c8e6c9; color:#2e7d32; }
+  .token.playing { background:#1e88e5; color:white; transform:scale(1.03); }
   </style>
 </head>
 <body>
@@ -535,6 +551,37 @@
       <div id="downloadArea" class="download-area">
         <p>Después de generar, aquí aparecerán los archivos generados para descargar y reproducir.</p>
       </div>
+    </div>
+
+    <!-- Detailed generation result & interactive piano -->
+    <div id="generationDetail" class="section" style="display:none;">
+      <div class="section-header">
+        <div class="section-number">4</div>
+        <h2 class="section-title">Detalle de la Generación</h2>
+      </div>
+      <div id="genInfo" style="margin-bottom:1rem; display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px;"></div>
+
+      <div class="section" style="padding:1rem; margin-bottom:1rem;">
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px;">
+          <button id="genPlayBtn" class="btn">Reproducir Secuencia (tokens)</button>
+          <button id="genStopBtn" class="btn" disabled>Detener</button>
+          <div style="color:#78909c; margin-left:auto; font-size:0.9rem;">Velocidad: <input id="tokenInterval" type="number" value="300" min="80" max="2000" step="10" style="width:90px; margin-left:8px;" /></div>
+        </div>
+        <div class="piano-container"><div id="genPiano" class="piano" style="height:140px;"></div></div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
+        <div>
+          <h3 style="color:#5c6bc0; margin-bottom:8px;">Tokens Generados</h3>
+          <div class="token-display"><div class="token-grid" id="genTokensGrid"></div></div>
+        </div>
+        <div>
+          <h3 style="color:#5c6bc0; margin-bottom:8px;">Tokens Seed</h3>
+          <div class="token-display"><div class="token-grid" id="seedTokensGrid"></div></div>
+        </div>
+      </div>
+
+      <div style="margin-top:1rem;" id="genFilesArea"></div>
     </div>
   </div>
 
@@ -654,9 +701,9 @@
           delete displayData.synthesis_error; 
         } catch(e){}
         
-        const resultPre = document.getElementById("generateResult");
-        resultPre.textContent = JSON.stringify(displayData, null, 2);
-        resultPre.style.display = 'block';
+  const resultPre = document.getElementById("generateResult");
+  resultPre.textContent = JSON.stringify(displayData, null, 2);
+  resultPre.style.display = 'none';
 
         if (data.files) {
           const imgDiv = document.getElementById("images");
@@ -778,6 +825,8 @@
             controlsDiv.appendChild(restartBtn);
             
             dlArea.appendChild(controlsDiv);
+            // render detailed generation UI (always show the nicer UI)
+            try { renderGenerationDetail(data); document.getElementById('generationDetail').scrollIntoView({behavior:'smooth'}); } catch(e){ console.error('renderGenerationDetail error', e); }
           }
         }
       } catch (error) {
@@ -1078,6 +1127,200 @@
       try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch(e) {}
       document.querySelectorAll('button[data-midi-player="true"]').forEach(b => { b.textContent = 'Reproducir MIDI (navegador)'; });
       _midiPlayer.started = false;
+    }
+
+    // ---------------------- Generation detail & token playback ----------------------
+    let _genSynth = null;
+    let _genPlayTimer = null;
+    let _genPlaying = false;
+    let _genIndex = 0;
+
+    function convertTokenToNotes(token){
+      if (!token || token === '<UNK>' || token.toUpperCase() === 'REST') return [];
+      // token examples: C#4, E-5 (flat written E-5), or chords: C4.E4.G4
+      const parts = token.split('.').map(p => p.trim()).filter(Boolean);
+      const notes = parts.map(p => {
+        // normalize flat notation '-' -> 'b' (E-5 => Eb5)
+        let t = p.replace('-', 'b');
+        // if token is missing octave (rare) we leave as-is
+        return t;
+      });
+      return notes;
+    }
+
+    function buildGenPiano(containerId){
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+  const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const octaves = [1,2,3,4,5,6,7];
+      // Create keys horizontally
+      const keyboard = document.createElement('div');
+      keyboard.style.display = 'flex';
+      keyboard.style.position = 'relative';
+
+      octaves.forEach(oct => {
+        // for layout we'll append white keys and overlay black keys absolutely
+        notes.forEach((note, i) => {
+          const isBlack = note.includes('#');
+          const key = document.createElement('div');
+          key.className = 'key ' + (isBlack ? 'black-key' : 'white-key');
+          key.dataset.note = note + oct;
+          key.style.position = isBlack ? 'absolute' : 'relative';
+          if (!isBlack) {
+            key.style.width = '40px';
+            key.style.height = '140px';
+            key.style.marginRight = '2px';
+          } else {
+            key.style.width = '26px';
+            key.style.height = '92px';
+            key.style.left = ( ( (oct - octaves[0]) * 12 + i ) * 42 - 12 ) + 'px';
+            key.style.top = '0';
+          }
+          key.textContent = isBlack ? '' : (note + oct);
+          key.addEventListener('click', () => {
+            const n = convertTokenToNotes(note + oct);
+            if (n.length && _genSynth) {
+              try { _genSynth.triggerAttackRelease(n, '8n'); } catch(e){}
+            }
+          });
+          keyboard.appendChild(key);
+        });
+      });
+
+      container.appendChild(keyboard);
+    }
+
+    function highlightKeysForNotes(notes){
+      // remove previous
+      document.querySelectorAll('#genPiano .key').forEach(k => k.classList.remove('active'));
+      if (!notes || !notes.length) return;
+      // map flats to equivalent sharps for matching (Eb -> D#)
+      const flatToSharp = { 'Ab':'G#','Bb':'A#','Cb':'B','Db':'C#','Eb':'D#','Fb':'E','Gb':'F#' };
+      notes.forEach(n => {
+        // try direct match
+        let matched = false;
+        const allKeys = Array.from(document.querySelectorAll('#genPiano .key'));
+        let el = allKeys.find(k => k.dataset.note === n);
+        if (el) { el.classList.add('active'); matched = true; }
+        if (!matched) {
+          // if note contains flat 'b' (e.g. Eb4) try enharmonic sharp
+          if (n.includes('b')){
+            const m = n.match(/^([A-G]b)(\d+)$/);
+            if (m){
+              const base = m[1]; const oct = m[2];
+              const sharp = (flatToSharp[base] || base) + oct;
+              el = allKeys.find(k => k.dataset.note === sharp);
+              if (el) { el.classList.add('active'); matched = true; }
+            }
+          }
+        }
+        if (!matched) {
+          // try alternative where token used '-' as flat marker like B-4 -> Bb4 -> map
+          const alt = n.replace('-', 'b');
+          el = Array.from(document.querySelectorAll('#genPiano .key')).find(k => k.dataset.note === alt);
+          if (el) el.classList.add('active');
+        }
+      });
+    }
+
+    async function playTokenSequence(tokens){
+      if (!tokens || !tokens.length) return;
+      if (_genPlaying) return;
+      try { await Tone.start(); } catch(e){}
+      if (!_genSynth) _genSynth = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8 }).toDestination();
+      try { _genSynth.volume.value = -8; } catch(e){}
+      const interval = parseInt(document.getElementById('tokenInterval').value || '300', 10);
+      _genPlaying = true; _genIndex = 0;
+      document.getElementById('genPlayBtn').disabled = true;
+      document.getElementById('genStopBtn').disabled = false;
+      _genPlayTimer = setInterval(() => {
+        if (_genIndex >= tokens.length) { stopGenSequence(); return; }
+        const tok = tokens[_genIndex];
+        const notes = convertTokenToNotes(tok);
+        // visual
+        document.querySelectorAll('#genTokensGrid .token').forEach(t=>t.classList.remove('playing'));
+        const tEl = document.querySelector(`#genTokensGrid .token[data-index="${_genIndex}"]`);
+        if (tEl) tEl.classList.add('playing');
+        highlightKeysForNotes(notes);
+        if (notes && notes.length) {
+          try { _genSynth.triggerAttackRelease(notes, '8n'); } catch(e){}
+        }
+        _genIndex++;
+      }, interval);
+    }
+
+    function stopGenSequence(){
+      _genPlaying = false;
+      if (_genPlayTimer) { clearInterval(_genPlayTimer); _genPlayTimer = null; }
+      document.getElementById('genPlayBtn').disabled = false;
+      document.getElementById('genStopBtn').disabled = true;
+      document.querySelectorAll('#genTokensGrid .token').forEach(t=>t.classList.remove('playing'));
+      document.querySelectorAll('#genPiano .key').forEach(k=>k.classList.remove('active'));
+    }
+
+    function renderGenerationDetail(data){
+      // show panel
+      document.getElementById('generationDetail').style.display = 'block';
+      // info
+      const info = document.getElementById('genInfo');
+      info.innerHTML = '';
+      const fields = [ ['Modelo', data.model_id], ['Modo', data.mode], ['Longitud', data.gen_len], ['Temperatura', data.temperature], ['Tokens generados', (data.tokens_generated_decoded||[]).length], ['Tokens seed', (data.tokens_seed||[]).length] ];
+      fields.forEach(f => {
+        const d = document.createElement('div'); d.style.background='#f8fafc'; d.style.padding='10px'; d.style.borderRadius='8px'; d.style.border='1px solid #eef7ff';
+        d.innerHTML = `<div style="font-size:0.85rem;color:#78909c">${f[0]}</div><div style="font-weight:700;color:#1565c0;margin-top:6px">${f[1] ?? ''}</div>`;
+        info.appendChild(d);
+      });
+
+      // build piano
+      buildGenPiano('genPiano');
+
+      // tokens grids
+      const genGrid = document.getElementById('genTokensGrid'); genGrid.innerHTML = '';
+      (data.tokens_generated_decoded||[]).forEach((tok,i)=>{
+        const el = document.createElement('div'); el.className = 'token'; el.dataset.index = i; el.textContent = tok;
+        if (tok === '<UNK>') el.classList.add('unknown');
+        if (tok === 'REST') el.classList.add('rest');
+        el.addEventListener('click', () => {
+          document.querySelectorAll('#genTokensGrid .token').forEach(t=>t.classList.remove('playing'));
+          el.classList.add('playing');
+          const notes = convertTokenToNotes(tok);
+          highlightKeysForNotes(notes);
+          if (!_genSynth) _genSynth = new Tone.PolySynth(Tone.Synth).toDestination();
+          try{ _genSynth.triggerAttackRelease(notes, '8n'); }catch(e){}
+        });
+        genGrid.appendChild(el);
+      });
+
+      const seedGrid = document.getElementById('seedTokensGrid'); seedGrid.innerHTML = '';
+      (data.tokens_seed||[]).forEach(tok=>{
+        const el = document.createElement('div'); el.className = 'token'; el.textContent = tok;
+        if (tok === '<UNK>') el.classList.add('unknown');
+        if (tok === 'REST') el.classList.add('rest');
+        el.addEventListener('click', () => {
+          const notes = convertTokenToNotes(tok);
+          highlightKeysForNotes(notes);
+          if (!_genSynth) _genSynth = new Tone.PolySynth(Tone.Synth).toDestination();
+          try{ _genSynth.triggerAttackRelease(notes, '8n'); }catch(e){}
+        });
+        seedGrid.appendChild(el);
+      });
+
+      // files
+      const filesArea = document.getElementById('genFilesArea'); filesArea.innerHTML = '';
+      if (data.files) {
+        const midiUrl = data.files.midi && data.files.midi.startsWith('/') ? API_BASE + data.files.midi : data.files.midi;
+        const seedImg = data.files.pianoroll_seed && (data.files.pianoroll_seed.startsWith('/') ? API_BASE + data.files.pianoroll_seed : data.files.pianoroll_seed);
+        const genImg = data.files.pianoroll_gen && (data.files.pianoroll_gen.startsWith('/') ? API_BASE + data.files.pianoroll_gen : data.files.pianoroll_gen);
+        filesArea.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="file-card" style="min-width:220px"><div class="file-title">MIDI</div><div class="file-path">${midiUrl || ''}</div><a class="btn" href="${midiUrl || '#'}" download>Descargar MIDI</a></div>
+            <div class="file-card" style="min-width:220px"><div class="file-title">PianoRoll - Seed</div><div class="file-path">${seedImg || ''}</div>${seedImg ? `<a class="btn" href="${seedImg}" target="_blank">Ver</a>` : ''}</div>
+            <div class="file-card" style="min-width:220px"><div class="file-title">PianoRoll - Generado</div><div class="file-path">${genImg || ''}</div>${genImg ? `<a class="btn" href="${genImg}" target="_blank">Ver</a>` : ''}</div>
+          </div>`;
+      }
+
+      // attach play/stop handlers
+      document.getElementById('genPlayBtn').onclick = () => playTokenSequence(data.tokens_generated_decoded || []);
+      document.getElementById('genStopBtn').onclick = () => stopGenSequence();
     }
   </script>
 </body>
