@@ -7,3 +7,8 @@ librosa
 matplotlib
 numpy
 tensorflow
+shap
+lime
+scikit-learn
+pandas
+joblib

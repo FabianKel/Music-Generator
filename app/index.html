@@ -516,6 +516,30 @@
     100%{background-position: left}
   }
   #generateLoader { display: none; margin: 12px auto 0; text-align: center; }
+  /* XAI thumbnails and modal */
+  .xai-container { margin-top: 12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  /*centered XAI  */
+  .xai-thumb {
+    width:240px;
+    height:180px;
+    object-fit:contain;
+    display:block;
+    margin:0 auto;
+    border-radius:10px;
+    border:1px solid #e3f2fd;
+    cursor:pointer;
+    box-shadow:0 12px 30px rgba(93,114,179,0.08);
+    background: #ffffff;
+    padding: 6px;
+  }
+  .xai-thumb-label { font-size:0.85rem; color:#546e7a; text-align:center; width:240px; margin:0 auto; }
+  .xai-loading { font-size:0.85rem; color:#1976d2; font-weight:700; }
+
+  /* modal for large XAI view */
+  .xai-modal-backdrop { position:fixed; inset:0; background:rgba(12,20,40,0.6); display:none; align-items:center; justify-content:center; z-index:9999; }
+  .xai-modal-content { background:white; padding:12px; border-radius:10px; max-width:90%; max-height:90%; overflow:auto; box-shadow:0 8px 30px rgba(0,0,0,0.3); }
+  .xai-modal-content img { max-width:100%; height:auto; display:block; }
+  .xai-modal-close { position:absolute; right:18px; top:18px; background:#ff5252; color:white; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -526,7 +550,7 @@
         <video id="headerVideo" autoplay muted loop playsinline style="width:100%; max-height:280px; border-radius:12px; object-fit:cover; display:block; box-shadow: 0 8px 30px rgba(0,0,0,0.12);"></video>
         <div id="headerTitle" style="position:absolute; text-align:center; pointer-events:none;">
           <h1>MusicGen API</h1>
-          <p class="subtitle">Generador de música con inteligencia artificial</p>
+          <p class="subtitle">Generador de música</p>
         </div>
       </div>
     </header>
@@ -641,6 +665,14 @@
     </div>
   </div>
 
+  <!-- XAI modal viewer -->
+  <div id="xaiModal" class="xai-modal-backdrop" onclick="closeXaiModal(event)">
+    <div class="xai-modal-content" onclick="event.stopPropagation()">
+      <button class="xai-modal-close" onclick="closeXaiModal(event)">Cerrar</button>
+      <div id="xaiModalBody"></div>
+    </div>
+  </div>
+
   <script>
     const API_BASE = "http://localhost:8000";
 
@@ -701,9 +733,12 @@
               <div class="path-item"><span class="path-label">Modelo:</span><span class="path-value">${m.model_path || ''}</span></div>
               <div class="path-item"><span class="path-label">Tokens:</span><span class="path-value">${m.token2idx_path || ''}</span></div>
             </div>
+            <div class="xai-container" id="xai-${m.id}"></div>
           `;
 
           grid.appendChild(card);
+          // render or generate XAI thumbnails for this model card
+          try { renderXaiForCard(m.id, card); } catch(e){ console.warn('renderXaiForCard error', e); }
         });
 
       } catch (error) {
@@ -948,6 +983,108 @@
       try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch(e){}
     }
     tryLoadDefaultHeaderVideo();
+
+    // ---------------- XAI: check/generate thumbnails per model ----------------
+    function openXaiModal(imgSrc){
+      const modal = document.getElementById('xaiModal');
+      const body = document.getElementById('xaiModalBody');
+      body.innerHTML = `<img src="${imgSrc}" alt="XAI" />`;
+      modal.style.display = 'flex';
+    }
+
+    function closeXaiModal(e){
+      if (e) e.stopPropagation && e.stopPropagation();
+      const modal = document.getElementById('xaiModal');
+      const body = document.getElementById('xaiModalBody');
+      modal.style.display = 'none';
+      body.innerHTML = '';
+    }
+
+    async function renderXaiForCard(modelId, cardElement){
+      // cardElement may be the card DOM node or undefined; we will locate the container by id
+      const containerId = `xai-${modelId}`;
+      const container = (cardElement && cardElement.querySelector) ? cardElement.querySelector(`#${containerId}`) : document.getElementById(containerId);
+      if (!container) return;
+      container.innerHTML = `<div class="xai-loading">Comprobando XAI...</div>`;
+
+      try {
+        const res = await fetch(`${API_BASE}/models/${encodeURIComponent(modelId)}/xai`);
+        if (res.ok) {
+          const j = await res.json();
+          const images = j && (j.images || j) ? (j.images || j) : [];
+          if (images && images.length) {
+            container.innerHTML = '';
+            // prefer thumbnail display and open large in modal if available
+            let thumb = null, large = null;
+            images.forEach(img => {
+              const low = img.toLowerCase();
+              if (low.includes('_thumb')) thumb = img;
+              if (low.includes('_large')) large = img;
+            });
+            // fallback to first image as both thumb and large
+            if (!thumb) thumb = images[0];
+            if (!large) large = images.length > 1 ? images.find(p=>p!==thumb) : images[0];
+            const srcThumb = thumb.startsWith('/') ? API_BASE + thumb : thumb;
+            const srcLarge = large.startsWith('/') ? API_BASE + large : large;
+            const imgEl = document.createElement('img');
+            imgEl.src = srcThumb;
+            imgEl.className = 'xai-thumb';
+            imgEl.title = 'Ver XAI';
+            imgEl.onclick = () => openXaiModal(srcLarge);
+            container.appendChild(imgEl);
+            return;
+          }
+        }
+      } catch(e){ console.warn('xai list err', e); }
+      container.innerHTML = `<div class="xai-loading">Generando gráfico ...</div>`;
+      try {
+  const fd = new FormData();
+  fd.append('kind', 'lime');
+  fd.append('blocking', 'true');
+  const genRes = await fetch(`${API_BASE}/models/${encodeURIComponent(modelId)}/xai/generate`, { method: 'POST', body: fd });
+        if (!genRes.ok) throw new Error(`Server responded ${genRes.status}`);
+        const genJson = await genRes.json();
+        const paths = [];
+        if (genJson.path) paths.push(genJson.path);
+        if (genJson.images) genJson.images.forEach(p=>paths.push(p));
+        // as fallback, re-query list endpoint
+        if (!paths.length) {
+          try {
+            const r2 = await fetch(`${API_BASE}/models/${encodeURIComponent(modelId)}/xai`);
+            if (r2.ok) {
+              const j2 = await r2.json();
+              const imgs = j2 && (j2.images || j2) ? (j2.images || j2) : [];
+              imgs.forEach(i=>paths.push(i));
+            }
+          } catch(e){}
+        }
+
+        if (paths.length) {
+          // choose thumb + large if possible
+          let thumb = null, large = null;
+          paths.forEach(p => {
+            const low = p.toLowerCase();
+            if (low.includes('_thumb')) thumb = p;
+            if (low.includes('_large')) large = p;
+          });
+          if (!thumb) thumb = paths[0];
+          if (!large) large = paths.length > 1 ? paths.find(p=>p!==thumb) : paths[0];
+          const srcThumb = thumb.startsWith('/') ? API_BASE + thumb : thumb;
+          const srcLarge = large.startsWith('/') ? API_BASE + large : large;
+          container.innerHTML = '';
+          const imgEl = document.createElement('img');
+          imgEl.src = srcThumb;
+          imgEl.className = 'xai-thumb';
+          imgEl.onclick = () => openXaiModal(srcLarge);
+          container.appendChild(imgEl);
+        } else {
+          container.innerHTML = `<div class="xai-loading">No fue posible generar el gráfico.</div>`;
+        }
+      } catch (ex) {
+        console.error('XAI generate error', ex);
+        container.innerHTML = `<div class="xai-loading">Error generando XAI</div>`;
+      }
+    }
 
     document.getElementById('genFile').addEventListener('change', function(e){
       const f = this.files && this.files[0];

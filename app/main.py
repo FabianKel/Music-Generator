@@ -6,28 +6,26 @@ import shutil
 from functools import lru_cache
 from typing import Optional
 from pathlib import Path
-
-import numpy as np
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-
-
-# ML & audio libs
-from tensorflow.keras.models import load_model
-import music21 as m21
-import pretty_midi
 import librosa
 import matplotlib.pyplot as plt
+import uuid
+import statistics
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import numpy as np
+import pretty_midi
+import music21 as m21
+from tensorflow.keras.models import load_model
 
 # CONFIG
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODELS_JSON = BASE_DIR / "app/models.json"
 UPLOAD_DIR = BASE_DIR / "uploads"
 GENERATED_DIR = BASE_DIR / "generated"
-SOUNDFONT_PATH = os.environ.get("SOUNDFONT_PATH", "")  # e.g. "/usr/share/sounds/sf2/FluidR3_GM.sf2"
+SOUNDFONT_PATH = os.environ.get("SOUNDFONT_PATH", "")  
 
 for d in (UPLOAD_DIR, GENERATED_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -44,10 +42,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve app/data as /static for simple assets (e.g. header video)
+#  header video
 static_dir = BASE_DIR / "app" / "data"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+# Ensure non-interactive backend for server environments (avoids Tk errors)
+try:
+    plt.switch_backend('Agg')
+except Exception:
+    pass
+
+# Matplotlib styling for clearer, publication-quality plots
+try:
+    plt.style.use('seaborn-whitegrid')
+    plt.rcParams.update({
+        'font.size': 10,
+        'axes.titlesize': 12,
+        'axes.labelsize': 10,
+        'legend.fontsize': 9,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+    })
+except Exception:
+    pass
+
+try:
+    from PIL import Image
+    def create_thumbnail_from_large(large_path, thumb_path, size=(360, 240)):
+        try:
+            with Image.open(large_path) as im:
+                im = im.convert('RGB')
+                im.thumbnail(size, Image.LANCZOS)
+                im.save(thumb_path, optimize=True, quality=85)
+                return True
+        except Exception:
+            return False
+except Exception:
+    def create_thumbnail_from_large(large_path, thumb_path, size=(360, 240)):
+        try:
+            shutil.copy(large_path, thumb_path)
+            return True
+        except Exception:
+            return False
 
 
 # Serve the frontend index.html at project root
@@ -91,7 +128,7 @@ def load_model_and_vocab(model_path: str, token2idx_path: str):
     VOCAB_SIZE = len(token2idx) + 1
     return model, token2idx, idx2token, VOCAB_SIZE
 
-# ---------- Token/sequence helpers (adaptadas a tu notebook) ----------
+# ---------- Token/sequence helpers----------
 def sequence_to_tokens(seq_indices, idx2token):
     return [idx2token.get(int(i), "<UNK>") for i in seq_indices]
 
@@ -685,3 +722,488 @@ async def tokenize_file(file: UploadFile = File(...), model_id: Optional[str] = 
         return JSONResponse(content=resp)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# -------------------- XAI endpoints (perturbation-based fallback) --------------------
+_XAI_JOBS = {}
+
+def get_xai_dir():
+    d = BASE_DIR / "app" / "data" / "xai"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@app.get("/models/{model_id}/xai")
+def list_model_xai(model_id: str):
+    d = get_xai_dir()
+    patterns = [f for f in d.iterdir() if f.is_file() and f.name.startswith(f"{model_id}_")]
+    images = []
+    for p in sorted(patterns):
+        images.append(f"/static/xai/{p.name}")
+    return {"images": images}
+
+
+def _generate_xai_for_model(model_id: str, kind: str = "perturbation", top_n: int = 12):
+    """Generate XAI images for a model and save thumb+large PNGs.
+    Attempts SHAP KernelExplainer+summary_plot when requested/available; falls back to perturbation.
+    Returns dict with images and token_stats.
+    """
+    # locate model entry
+    models = read_models_catalog()
+    entry = next((m for m in models if m["id"] == model_id), None)
+    if entry is None:
+        raise FileNotFoundError("Model not found")
+    model_path = entry["model_path"]
+    token2idx_path = entry["token2idx_path"]
+
+    model, token2idx, idx2token, VOCAB_SIZE = load_model_and_vocab(model_path, token2idx_path)
+
+    # choose a reference MIDI (use first available sample in app/data or lullaby)
+    sample_midi = BASE_DIR / "app" / "data" / "lullaby-piano.mid"
+    if not sample_midi.exists():
+        # try twinkle
+        sample_midi = BASE_DIR / "app" / "data" / "twinkle-twinkle-little-star.mid"
+    if not sample_midi.exists():
+        raise FileNotFoundError("No reference MIDI found under app/data for XAI generation")
+
+    tokens = midi_to_sequence_tokens(sample_midi)
+    # limit length for speed
+    MAX_TOKENS = min(len(tokens), 64)
+    tokens = tokens[:MAX_TOKENS]
+    seed_indices, not_found = encode_seed(tokens, token2idx)
+    if len(seed_indices) == 0:
+        raise RuntimeError("Reference MIDI tokens could not be mapped to model vocabulary")
+
+    # prepare base input for prediction: last SEQ_LEN positions expected by model
+    SEQ_LEN = model.input_shape[1]
+    # ensure we have at least SEQ_LEN by left-padding with first token
+    padded = ( [seed_indices[0]] * max(0, SEQ_LEN - len(seed_indices)) ) + seed_indices
+    input_seq = np.array([padded[-SEQ_LEN:]])
+    baseline_pred = model.predict(input_seq, verbose=0)[0]
+
+    xai_dir = get_xai_dir()
+    large_fp = xai_dir / f"{model_id}_{kind}_large.png"
+    thumb_fp = xai_dir / f"{model_id}_{kind}_thumb.png"
+
+    # Fast mode: for each unique token in the input (up to top_n), replace all its occurrences
+    # a few times and measure the prediction change. Much fewer model calls than per-position sampling.
+    if kind == "fast" or kind == "auto":
+        rng = np.random.default_rng(2026)
+        repeats_per_token = 3
+        arr = input_seq[0]
+        unique, counts = np.unique(arr, return_counts=True)
+        # sort tokens by frequency desc, skip special tokens if needed
+        order = np.argsort(-counts)
+        token_idxs = [int(unique[i]) for i in order][:top_n]
+        token_acc = {}
+        for tidx in token_idxs:
+            diffs = []
+            positions = np.where(arr == tidx)[0]
+            if len(positions) == 0:
+                continue
+            for r in range(repeats_per_token):
+                pert = arr.copy()
+                for p in positions:
+                    pert[p] = int(rng.integers(0, VOCAB_SIZE))
+                try:
+                    pred = model.predict(np.array([pert]), verbose=0)[0]
+                except Exception:
+                    continue
+                diff = float(np.sum(np.abs(baseline_pred - pred)))
+                diffs.append(diff)
+            if len(diffs) == 0:
+                continue
+            token_name = idx2token.get(int(tidx), str(tidx))
+            token_acc[token_name] = {"mean": float(statistics.mean(diffs)), "std": float(statistics.pstdev(diffs) if len(diffs) > 1 else 0.0), "samples": len(diffs)}
+
+        stats = [{"token": t, "mean": v["mean"], "std": v["std"], "samples": v["samples"]} for t, v in token_acc.items()]
+        stats = sorted(stats, key=lambda x: x["mean"], reverse=True)
+        top_stats = stats[:top_n]
+
+        # plotting
+        labels = [s["token"] for s in top_stats][::-1]
+        means = [s["mean"] for s in top_stats][::-1]
+        stds = [s["std"] for s in top_stats][::-1]
+        plt.figure(figsize=(9, max(3, 0.4 * len(labels) + 1)))
+        y = np.arange(len(labels))
+        plt.barh(y, means, xerr=stds, align='center', color='#1b6ca8')
+        plt.yticks(y, labels, fontsize=10)
+        plt.xlabel('Approx. importance (mean L1 change)', fontsize=11)
+        plt.title(f'XAI (fast) for {model_id}', fontsize=12)
+        plt.tight_layout()
+        plt.savefig(large_fp, dpi=150)
+        plt.close()
+
+        # Prefer creating a thumbnail from the large image for consistent appearance
+        if not create_thumbnail_from_large(large_fp, thumb_fp):
+            try:
+                plt.figure(figsize=(4, max(1, 0.28 * len(labels))))
+                y = np.arange(len(labels))
+                plt.barh(y, means, xerr=stds, align='center', color='#1b6ca8')
+                plt.yticks(y, labels, fontsize=8)
+                plt.tight_layout()
+                plt.savefig(thumb_fp, dpi=100)
+                plt.close()
+            except Exception:
+                try:
+                    shutil.copy(large_fp, thumb_fp)
+                except Exception:
+                    pass
+
+        return {"images": [f"/static/xai/{large_fp.name}", f"/static/xai/{thumb_fp.name}"], "token_stats": top_stats, "method": "fast"}
+
+    # If SHAP requested or auto, try KernelExplainer-based approach first
+    tried_shap = False
+    if kind in ("shap", "auto"):
+        try:
+            import shap
+            tried_shap = True
+            # Build a small set of input rows: the original plus a few perturbed variants
+            rng = np.random.default_rng(2025)
+            n_variants = 6
+            rows = [input_seq[0]]
+            for _ in range(n_variants):
+                v = list(input_seq[0].copy())
+                # apply a few random substitutions
+                nsubs = max(1, int(0.12 * len(v)))
+                for __ in range(nsubs):
+                    pos = int(rng.integers(0, len(v)))
+                    v[pos] = int(rng.integers(0, VOCAB_SIZE))
+                rows.append(np.array(v))
+            rows_arr = np.vstack(rows)
+
+            # explain the probability of the predicted class (argmax)
+            target_class = int(np.argmax(baseline_pred))
+            def f(x):
+                # ensure numpy array
+                try:
+                    preds = model.predict(np.array(x), verbose=0)
+                    return preds[:, target_class]
+                except Exception:
+                    # fallback: return zeros of appropriate shape
+                    arr = np.zeros((np.array(x).shape[0],), dtype=float)
+                    return arr
+
+            # background dataset: use the original input as background (fast)
+            background = np.array([input_seq[0]])
+            explainer = shap.KernelExplainer(f, background)
+            nsamples = 40
+            shap_vals = explainer.shap_values(rows_arr, nsamples=nsamples)
+            # shap_vals shape: (n_rows, SEQ_LEN)
+            # aggregate per position across rows
+            shap_abs = np.abs(shap_vals)
+            pos_means = np.mean(shap_abs, axis=0)
+            pos_stds = np.std(shap_abs, axis=0)
+
+            # aggregate by token label (group positions that have same token name)
+            token_acc = {}
+            pos_tokens = [idx2token.get(int(x), str(x)) for x in input_seq[0]]
+            for i, tname in enumerate(pos_tokens):
+                token_acc.setdefault(tname, []).append(float(pos_means[i]))
+
+            stats = []
+            for t, vals in token_acc.items():
+                meanv = statistics.mean(vals) if len(vals) else 0.0
+                stdv = statistics.pstdev(vals) if len(vals) else 0.0
+                stats.append({"token": t, "mean": meanv, "std": stdv, "samples": len(vals)})
+            stats = sorted(stats, key=lambda x: x["mean"], reverse=True)
+            top_stats = stats[:top_n]
+
+            # SHAP summary plot (save)
+            try:
+                plt.figure(figsize=(10, 6))
+                # shap.summary_plot expects (n_samples, n_features)
+                shap.summary_plot(shap_vals, features=rows_arr, feature_names=pos_tokens, show=False)
+                plt.tight_layout()
+                plt.savefig(large_fp, dpi=150)
+                plt.close()
+                # also create thumbnail by copying/resizing
+                try:
+                    plt.figure(figsize=(4, max(1, 0.25 * len(top_stats))))
+                    y = np.arange(len(top_stats[::-1]))
+                    labels = [s['token'] for s in top_stats][::-1]
+                    means = [s['mean'] for s in top_stats][::-1]
+                    stds = [s['std'] for s in top_stats][::-1]
+                    plt.barh(y, means, xerr=stds, align='center', color='#264653')
+                    plt.yticks(y, labels)
+                    plt.tight_layout()
+                    # create thumb from large if possible
+                    if not create_thumbnail_from_large(large_fp, thumb_fp):
+                        try:
+                            plt.savefig(thumb_fp, dpi=100)
+                        except Exception:
+                            try:
+                                shutil.copy(large_fp, thumb_fp)
+                            except Exception:
+                                pass
+                    plt.close()
+                except Exception:
+                    try:
+                        shutil.copy(large_fp, thumb_fp)
+                    except Exception:
+                        pass
+            except Exception:
+                # If summary_plot fails, fall back to bar chart below
+                pass
+
+            return {"images": [f"/static/xai/{large_fp.name}", f"/static/xai/{thumb_fp.name}"], "token_stats": top_stats, "method": "shap"}
+
+        except Exception as e:
+            # If SHAP isn't installed or explainer failed, continue to perturbation fallback
+            tried_shap = True
+            shap_err = str(e)
+
+    # LIME-style local surrogate explainer (faster than SHAP, more detailed than fast heuristic)
+    if kind in ("lime", "auto"):
+        try:
+            # import sklearn on demand
+            from sklearn.linear_model import Ridge
+            import sklearn
+            # parameters for LIME-style perturbations
+            N_PERTURBS = 300
+            P_KEEP = 0.6  # probability to keep an original token at each position
+            kernel_width = max(1.0, SEQ_LEN * 0.25)
+
+            rng = np.random.default_rng(2027)
+            X = []  # binary mask: 1 if original token kept, 0 if replaced
+            y = []  # model predictions for target_class
+
+            # We'll target the model's predicted class for the original input
+            target_class = int(np.argmax(baseline_pred))
+
+            for i in range(N_PERTURBS):
+                mask = (rng.random(size=SEQ_LEN) < P_KEEP).astype(int)
+                pert = input_seq[0].copy()
+                # replace positions where mask==0 with random token
+                zeros = np.where(mask == 0)[0]
+                for p in zeros:
+                    pert[p] = int(rng.integers(0, VOCAB_SIZE))
+                try:
+                    pred = model.predict(np.array([pert]), verbose=0)[0]
+                except Exception:
+                    continue
+                X.append(mask)
+                y.append(float(pred[target_class]))
+
+            if len(y) < 10:
+                raise RuntimeError("Not enough perturbation samples for LIME")
+
+            X = np.vstack(X)
+            y = np.array(y)
+
+            # compute sample weights using exponential kernel on Hamming distance
+            # Hamming distance = number of zeros (differences)
+            dists = (SEQ_LEN - X.sum(axis=1)).astype(float)
+            weights = np.exp(- (dists ** 2) / (2 * (kernel_width ** 2)))
+
+            # Fit weighted linear model
+            model_sur = Ridge(alpha=1.0)
+            model_sur.fit(X, y, sample_weight=weights)
+            intercept = float(model_sur.intercept_)
+            coefs = model_sur.coef_  # per-position contribution when feature==1
+
+            # Aggregate coefficients by token name
+            pos_tokens = [idx2token.get(int(x), str(x)) for x in input_seq[0]]
+            token_map = {}
+            for pos, tname in enumerate(pos_tokens):
+                token_map.setdefault(tname, []).append(float(coefs[pos]))
+
+            stats = []
+            for t, vals in token_map.items():
+                meanv = statistics.mean(vals) if len(vals) else 0.0
+                stdv = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+                stats.append({"token": t, "mean": meanv, "std": stdv, "samples": len(vals)})
+            stats = sorted(stats, key=lambda x: x["mean"], reverse=True)
+            top_stats = stats[:top_n]
+
+            # Build waterfall: start at intercept, add contributions for top tokens
+            contribs = [s["mean"] for s in top_stats]
+            labels = [s["token"] for s in top_stats]
+            # compute cumulative positions for waterfall
+            cum = intercept
+            values = []
+            starts = []
+            for v in contribs:
+                starts.append(cum)
+                cum += v
+                values.append(v)
+            final_pred = float(baseline_pred[target_class])
+
+            # Plot combined: left summary (bar mean±std) and right waterfall
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6), gridspec_kw={'width_ratios': [1, 1.2]})
+            # left: bar chart of importance
+            ax = axes[0]
+            y_pos = np.arange(len(labels))[::-1]
+            means = [s['mean'] for s in top_stats][::-1]
+            stds = [s['std'] for s in top_stats][::-1]
+            ax.barh(y_pos, means, xerr=stds, align='center', color='#2b8cbe')
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(labels, fontsize=10)
+            ax.set_title('Feature importance (LIME surrogate)')
+            ax.set_xlabel('Contribution to target probability')
+
+            # right: waterfall
+            ax2 = axes[1]
+            # draw bars
+            for i, (sval, start) in enumerate(zip(values, starts)):
+                if sval >= 0:
+                    ax2.barh(i, sval, left=start, color='#2ca02c')
+                else:
+                    ax2.barh(i, sval, left=start + sval, color='#d62728')
+                ax2.text(start + sval + (0.01 if sval >= 0 else -0.01), i, f"{sval:+.3f}", va='center', fontsize=9, color='black')
+            ax2.set_yticks(range(len(labels)))
+            ax2.set_yticklabels(labels, fontsize=10)
+            ax2.axvline(intercept, color='gray', linestyle='--', label='Intercept')
+            ax2.axvline(final_pred, color='black', linestyle='-', label='Model pred')
+            ax2.set_xlabel('Prediction value')
+            ax2.set_title('Waterfall: contributions from intercept to prediction')
+            ax2.legend()
+            plt.tight_layout()
+            plt.savefig(large_fp, dpi=150)
+            plt.close()
+
+            # thumbnail
+            try:
+                fig_thumb, ax_thumb = plt.subplots(1, 1, figsize=(4, max(1, 0.28 * len(labels))))
+                y_pos = np.arange(len(labels))[::-1]
+                ax_thumb.barh(y_pos, means, xerr=stds, align='center', color='#2b8cbe')
+                ax_thumb.set_yticks(y_pos)
+                ax_thumb.set_yticklabels(labels, fontsize=8)
+                ax_thumb.set_title('Importance (LIME)')
+                plt.tight_layout()
+                # create thumbnail from the large image for consistent appearance
+                if not create_thumbnail_from_large(large_fp, thumb_fp):
+                    try:
+                        fig_thumb.savefig(thumb_fp, dpi=100)
+                    except Exception:
+                        try:
+                            shutil.copy(large_fp, thumb_fp)
+                        except Exception:
+                            pass
+                plt.close(fig_thumb)
+            except Exception:
+                try:
+                    shutil.copy(large_fp, thumb_fp)
+                except Exception:
+                    pass
+
+            return {"images": [f"/static/xai/{large_fp.name}", f"/static/xai/{thumb_fp.name}"], "token_stats": top_stats, "method": "lime", "expected_value": intercept, "model_prediction": final_pred}
+
+        except Exception as e:
+            lime_err = str(e)
+            # fallthrough to next fallback (fast/perturbation)
+            pass
+
+    # If SHAP not available or failed, use perturbation fallback
+    # perturbation: for each position in the input sequence, sample random substitutions and measure L1 change
+    rng = np.random.default_rng(1234)
+    samples_per_pos = 18
+    token_acc = {}
+    for pos in range(len(padded[-SEQ_LEN:])):
+        orig = padded[-SEQ_LEN:][pos]
+        for s in range(samples_per_pos):
+            pert = list(padded[-SEQ_LEN:])
+            # replace with a random token index (avoid too many <UNK> if present)
+            cand = int(rng.integers(0, VOCAB_SIZE))
+            pert[pos] = cand
+            pert_arr = np.array([pert])
+            try:
+                pred = model.predict(pert_arr, verbose=0)[0]
+            except Exception:
+                continue
+            diff = float(np.sum(np.abs(baseline_pred - pred)))
+            tname = idx2token.get(int(orig), str(orig))
+            token_acc.setdefault(tname, []).append(diff)
+
+    # aggregate stats
+    stats = []
+    for t, vals in token_acc.items():
+        meanv = statistics.mean(vals) if len(vals) else 0.0
+        stdv = statistics.pstdev(vals) if len(vals) else 0.0
+        stats.append({"token": t, "mean": meanv, "std": stdv, "samples": len(vals)})
+    # sort by mean desc
+    stats = sorted(stats, key=lambda x: x["mean"], reverse=True)
+    top_stats = stats[:top_n]
+
+    labels = [s["token"] for s in top_stats][::-1]
+    means = [s["mean"] for s in top_stats][::-1]
+    stds = [s["std"] for s in top_stats][::-1]
+
+    plt.figure(figsize=(8, max(3, 0.35 * len(labels) + 1)))
+    y = np.arange(len(labels))
+    plt.barh(y, means, xerr=stds, align='center', color='#2a9d8f')
+    plt.yticks(y, labels)
+    plt.xlabel('Perturbation effect (L1 change)')
+    plt.title(f'Approximate feature importance (perturbation) for {model_id}')
+    plt.tight_layout()
+    plt.savefig(large_fp, dpi=150)
+    plt.close()
+
+    # thumbnail (smaller)
+    # Prefer creating a thumbnail from the large image for consistent appearance
+    if not create_thumbnail_from_large(large_fp, thumb_fp):
+        try:
+            plt.figure(figsize=(4, max(1, 0.25 * len(labels))))
+            y = np.arange(len(labels))
+            plt.barh(y, means, xerr=stds, align='center', color='#2a9d8f')
+            plt.yticks(y, labels)
+            plt.xlabel('Effect')
+            plt.tight_layout()
+            plt.savefig(thumb_fp, dpi=100)
+            plt.close()
+        except Exception:
+            try:
+                shutil.copy(large_fp, thumb_fp)
+            except Exception:
+                pass
+
+    return {
+        "images": [f"/static/xai/{large_fp.name}", f"/static/xai/{thumb_fp.name}"],
+        "token_stats": top_stats,
+        "method": "perturbation",
+        ("shap_error" if tried_shap and 'shap_err' in locals() else "note"): (shap_err if tried_shap and 'shap_err' in locals() else ("shap not attempted" if not tried_shap else ""))
+    }
+
+
+@app.post("/models/{model_id}/xai/generate")
+async def generate_model_xai(model_id: str, kind: str = Form("fast"), blocking: bool = Form(True), force: bool = Form(False), background_tasks: BackgroundTasks = None):
+    """Generate XAI images for a model.
+    If blocking=true (default) run synchronously and return images/token_stats.
+    If blocking=false, schedule background task and return job_id to poll /xai/jobs/{job_id}.
+    """
+    # quick cache check: if images already exist and force is False, return cached paths immediately
+    xai_dir_quick = get_xai_dir()
+    large_quick = xai_dir_quick / f"{model_id}_{kind}_large.png"
+    thumb_quick = xai_dir_quick / f"{model_id}_{kind}_thumb.png"
+    if large_quick.exists() and thumb_quick.exists() and not force:
+        return JSONResponse(content={"images": [f"/static/xai/{large_quick.name}", f"/static/xai/{thumb_quick.name}"], "cached": True})
+
+    if not blocking:
+        job_id = str(uuid.uuid4())
+        _XAI_JOBS[job_id] = {"status": "pending", "result": None}
+        def _bg(job_id_local, mid, k):
+            try:
+                res = _generate_xai_for_model(mid, kind=k)
+                _XAI_JOBS[job_id_local]["status"] = "done"
+                _XAI_JOBS[job_id_local]["result"] = res
+            except Exception as e:
+                _XAI_JOBS[job_id_local]["status"] = "error"
+                _XAI_JOBS[job_id_local]["result"] = {"error": str(e)}
+
+        background_tasks.add_task(_bg, job_id, model_id, kind)
+        return {"job_id": job_id, "status": "pending"}
+    else:
+        try:
+            res = _generate_xai_for_model(model_id, kind=kind)
+            return JSONResponse(content=res)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"XAI generation failed: {e}")
+
+
+@app.get("/xai/jobs/{job_id}")
+def get_xai_job(job_id: str):
+    if job_id not in _XAI_JOBS:
+        raise HTTPException(404, "Job not found")
+    return _XAI_JOBS[job_id]
